@@ -1,0 +1,11 @@
+{
+  "title": "Patient Transport Staffing Matrix Demo",
+  "description": "Streamline scheduling with an AI-driven tool that tracks staffing needs, generates user-friendly schedules, and suggests optimal staffing solutions.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
