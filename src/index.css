@@ -114,6 +114,16 @@ input, select {
   display: none;
 }
 
+.sidebar-is-collapsed .brand {
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 4px 0 16px;
+}
+
+.sidebar-is-collapsed .brand-mark {
+  display: none;
+}
+
 .brand-mark {
   width: 32px;
   height: 32px;
@@ -143,6 +153,10 @@ input, select {
 
 .sidebar-is-collapsed .sidebar-toggle {
   margin: 0 auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
 }
 
 .facility {
@@ -699,8 +713,23 @@ input, select {
 
 /* ========== Schedule Matrix Table ========== */
 .schedule-scroll {
-  overflow-x: auto;
+  overflow: auto;
   padding: 0 20px 8px;
+  max-height: calc(100vh - 260px);
+}
+
+.schedule-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.schedule-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+}
+
+.schedule-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
 }
 
 .schedule-matrix {
@@ -724,6 +753,10 @@ input, select {
   padding: 8px;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  box-shadow: 0 1px 0 var(--border);
 }
 
 .schedule-matrix .week-band th {
@@ -734,6 +767,9 @@ input, select {
   text-align: center;
   border-bottom: 1px solid var(--border);
   padding: 6px;
+  top: 0;
+  z-index: 6;
+  box-shadow: 0 1px 0 var(--border);
 }
 
 .schedule-matrix thead th strong {
@@ -755,9 +791,19 @@ input, select {
   background: var(--surface-2);
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  height: 42px;
+}
+
+.shift-header-row .shift-time-cell {
+  width: 33%;
+}
+
+.shift-header-row .shift-action-cell {
+  width: 25%;
+}
+
+.shift-header-row td.weekend {
+  background: var(--weekend);
 }
 
 .shift-name {
@@ -765,22 +811,16 @@ input, select {
   font-size: 12px;
 }
 
-.shift-count {
-  font-size: 11px;
-  color: var(--text-3);
-}
-
 .shift-add-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 3px;
   font-size: 11px;
   color: var(--primary);
-  padding: 2px 8px;
+  padding: 4px 8px;
   border-radius: 4px;
   border: 1px solid var(--primary-light);
   background: var(--primary-soft);
-  margin-left: auto;
   transition: background 0.12s;
 }
 
@@ -897,6 +937,7 @@ input, select {
 
 .open-slot-status-cell {
   padding: 6px 8px;
+  position: relative;
 }
 
 .open-slot-badge {
@@ -906,6 +947,22 @@ input, select {
   background: var(--error-light);
   padding: 2px 8px;
   border-radius: 4px;
+}
+
+.open-slot-delete-btn {
+  right: 2px;
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+.open-slot-delete-btn:hover {
+  color: var(--error);
 }
 
 .open-slot-name-cell {

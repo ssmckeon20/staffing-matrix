@@ -64,6 +64,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
   const [vpWeekendMult, setVpWeekendMult] = useState(0.65);
   const [vpVolume, setVpVolume] = useState<number[]>(Array(24).fill(4));
   const [vpManualStaff, setVpManualStaff] = useState<number[]>(Array(24).fill(0));
+  const [slotAdjustments, setSlotAdjustments] = useState<Record<number, number>>({});
 
   const dates = useMemo(() => getDateRange(viewType, rangeStart), [viewType, rangeStart]);
   const rangeEnd = dates[dates.length - 1];
@@ -110,6 +111,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
   // Reload assignments when group or date range changes
   useEffect(() => {
     if (!selectedGroup) return;
+    setSlotAdjustments({});
     (async () => {
       try {
         const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
@@ -224,24 +226,36 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
     return Math.max(0, vpManualStaff[hour] || 0);
   };
 
-  // Hourly shift grouping (members grouped by their shift start hour)
+  // Dynamic hourly grouping: members appear under the hour their ACTUAL scheduled shift starts.
+  // If they have no scheduled assignment on any displayed date, they fall back to their default shift hour.
+  // An employee who changes from 07:00 to 06:00 will immediately move to the 06:00 row.
   const membersByStartHour = useMemo(() => {
     const map = new Map<number, TeamMember[]>();
+    const dateISOs = dates.map((d) => formatDateISO(d));
     for (const member of groupMembers) {
-      const h = parseInt(member.default_shift_start.split(":")[0]);
-      if (!map.has(h)) map.set(h, []);
-      map.get(h)!.push(member);
+      // Find all distinct shift-start hours this member has across the displayed dates
+      const startHours = new Set<number>();
+      for (const dateISO of dateISOs) {
+        const shift = getMemberShiftForDate(member.id, dateISO);
+        if (shift.status === "Scheduled" && shift.start) {
+          startHours.add(parseInt(shift.start.split(":")[0]));
+        }
+      }
+      // If no scheduled assignments, use their default shift start as the fallback bucket
+      if (startHours.size === 0) {
+        startHours.add(parseInt(member.default_shift_start.split(":")[0]));
+      }
+      for (const h of startHours) {
+        if (!map.has(h)) map.set(h, []);
+        map.get(h)!.push(member);
+      }
     }
     return map;
-  }, [groupMembers]);
+  }, [groupMembers, assignments, dates]);
 
-  // Slot count per hour (from volume plan or default 1)
+  // Four slots per hour by default, plus user adjustments
   const slotsForHour = (hour: number): number => {
-    if (vpEnabled) {
-      return neededAt(hour, false);
-    }
-    // Default: 1 slot per hour in ops range
-    return 1;
+    return Math.max(0, 4 + (slotAdjustments[hour] || 0));
   };
 
   const openEditor = (member: TeamMember, date: Date) => {
@@ -617,7 +631,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
                   </thead>
                   <tbody>
                     {opsHours.map((hour) => {
-                      const hourMembers = groupMembers.filter((m) => parseInt(m.default_shift_start.split(":")[0]) === hour);
+                      const hourMembers = membersByStartHour.get(hour) || [];
                       const totalSlots = slotsForHour(hour);
                       const productiveCount = hourMembers.filter((m) => m.status === "Productive").length;
                       const openSlots = Math.max(0, totalSlots - productiveCount);
@@ -625,16 +639,21 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
                       return (
                         <Fragment key={hour}>
                           <tr className="shift-header-row">
-                            <td colSpan={dates.length + 2}>
+                            <td className="shift-time-cell">
                               <span className="shift-name">{formatHour24(hour)}</span>
-                              <span className="shift-count">{productiveCount} assigned · {totalSlots} slots needed</span>
-                              <button className="shift-add-btn" onClick={async () => {
-                                // Add 1 to volume for this hour if VP enabled, else just visual
+                            </td>
+                            <td className="shift-action-cell">
+                              <button className="shift-add-btn" onClick={() => {
+                                setSlotAdjustments((prev) => ({ ...prev, [hour]: (prev[hour] || 0) + 1 }));
+                                setHasDraftChanges(true);
                                 toast(`Added slot at ${formatHour24(hour)}`);
                               }}>
                                 <Icon name="plus" size={11} />Add slot
                               </button>
                             </td>
+                            {dates.map((date) => (
+                              <td key={formatDateISO(date)} className={isWeekend(date) ? "weekend" : ""} />
+                            ))}
                           </tr>
                           {hourMembers.map((member) => {
                             const schedHrs = memberScheduledHours(member);
@@ -661,6 +680,21 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
                                     <strong>{member.name}</strong>
                                     <span className="employee-hours">{hoursLabel(schedHrs)} scheduled</span>
                                   </div>
+                                  <button className="row-delete-btn" onClick={async () => {
+                                    // Remove all this member's scheduled assignments at this hour across displayed dates
+                                    const dateISOs = dates.map((d) => formatDateISO(d));
+                                    for (const dateISO of dateISOs) {
+                                      const shift = getMemberShiftForDate(member.id, dateISO);
+                                      if (shift.status === "Scheduled" && shift.start && parseInt(shift.start.split(":")[0]) === hour) {
+                                        await data.deleteShiftAssignment(member.id, dateISO);
+                                      }
+                                    }
+                                    await data.logChange(`Removed ${member.name} from ${formatHour24(hour)} line in ${currentGroup?.name}`, "Matrix");
+                                    const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
+                                    setAssignments(a);
+                                    setHasDraftChanges(true);
+                                    toast(`${member.name} removed from ${formatHour24(hour)}`);
+                                  }} aria-label={`Remove ${member.name} from this hour`} title="Remove from this hour">&#x2715;</button>
                                 </td>
                                 {dates.map((date) => {
                                   const dateISO = formatDateISO(date);
@@ -683,7 +717,14 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
                           {/* Open slot rows */}
                           {Array.from({ length: openSlots }, (_, i) => (
                             <tr key={`open-${hour}-${i}`} className="open-slot-row">
-                              <td className="open-slot-status-cell"><span className="open-slot-badge">Open</span></td>
+                              <td className="open-slot-status-cell">
+                                <span className="open-slot-badge">Open</span>
+                                <button className="row-delete-btn open-slot-delete-btn" onClick={() => {
+                                  setSlotAdjustments((prev) => ({ ...prev, [hour]: (prev[hour] || 0) - 1 }));
+                                  setHasDraftChanges(true);
+                                  toast(`Removed open slot at ${formatHour24(hour)}`);
+                                }} aria-label="Remove open slot" title="Remove open slot">&#x2715;</button>
+                              </td>
                               <td className="name-cell open-slot-name-cell">
                                 <button className="assign-slot-btn" onClick={() => { setAssignPanel({ hour, dateISO: formatDateISO(dates[0]) }); setAssignSearch(""); setBorrowMode(false); }}>
                                   <Icon name="plus" size={13} />Assign employee

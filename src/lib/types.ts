@@ -25,6 +25,7 @@ export interface TeamMember {
   default_shift_end: string;
   expected_weekly_hours: number;
   daily_unpaid_break: number;
+  overtime_threshold: number;
   hourly_rate: number;
   premium_pay_enabled: boolean;
   premium_rate: number;
