@@ -32,8 +32,8 @@ export default function HistoryTab() {
       {error && <div className="error-banner">{error}</div>}
       <section className="page-heading">
         <div>
-          <div className="title-row"><h1>Change history</h1></div>
-          <p>Review every schedule update and staffing decision.</p>
+          <div className="title-row"><h1>Change History</h1></div>
+          <p>Review Every Schedule Update And Staffing Decision.</p>
         </div>
         <Button icon="calendar">{formatDateRange(biweeklyStart, biweeklyEnd)}</Button>
       </section>

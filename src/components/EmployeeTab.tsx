@@ -3,7 +3,7 @@ import type { TeamMember, ShiftAssignment, AssignmentGroup, ScheduleNote, Schedu
 import * as data from "../lib/data";
 import { Icon, Button } from "./ui";
 import {
-  GROUP_COLORS, getCurrentBiweeklyStart, getDateRange, formatDateRange, formatDateISO,
+  GROUP_COLORS, getCurrentBiweeklyStart, getDateRange, formatDateRange, formatDateISO, addDays,
   dayNames, isWeekend, formatShiftDisplay, compactShift, hoursLabel, shiftDuration, formatDate,
 } from "../lib/helpers";
 
@@ -91,7 +91,7 @@ export default function EmployeeTab({ toast }: { toast: ToastFn }) {
     for (const date of dates) {
       const dateISO = formatDateISO(date);
       const a = getShift(member.id, dateISO);
-      if (a && a.status === "Scheduled" && a.shift_start && a.shift_end) {
+      if (a && (a.status === "Scheduled" || a.status === "Premium Pay") && a.shift_start && a.shift_end) {
         const dur = shiftDuration(a.shift_start, a.shift_end);
         total += Math.max(0, dur - member.daily_unpaid_break);
       }
@@ -110,18 +110,26 @@ export default function EmployeeTab({ toast }: { toast: ToastFn }) {
       <section className="page-heading">
         <div>
           <div className="title-row">
-            <h1>Employee schedule</h1>
+            <h1>Employee Schedule</h1>
             <span className="status-pill published">Published</span>
           </div>
-          <p>Schedules are updated when you publish from the Staffing Matrix.</p>
+          <p>Schedules Are Updated When You Publish From The Staffing Matrix.</p>
         </div>
         <div className="heading-actions">
+          <Button variant="icon" icon="chevronLeft" onClick={() => setRangeStart(addDays(rangeStart, viewType === "daily" ? -1 : viewType === "weekly" ? -7 : viewType === "bi-weekly" ? -14 : -30))} />
+          <button className="date-control">
+            <Icon name="calendar" />
+            <span>{formatDateRange(dates[0], rangeEnd)}</span>
+            <Icon name="chevronDown" size={16} />
+          </button>
+          <Button variant="icon" icon="chevronRight" onClick={() => setRangeStart(addDays(rangeStart, viewType === "daily" ? 1 : viewType === "weekly" ? 7 : viewType === "bi-weekly" ? 14 : 30))} />
           <div className="view-toggle">
-            <button className={viewType === "weekly" ? "active" : ""} onClick={() => setViewType("weekly")}>Weekly</button>
-            <button className={viewType === "bi-weekly" ? "active" : ""} onClick={() => setViewType("bi-weekly")}>Bi-weekly</button>
-            <button className={viewType === "monthly" ? "active" : ""} onClick={() => setViewType("monthly")}>Monthly</button>
+            <button className={viewType === "daily" ? "active" : ""} onClick={() => { setViewType("daily"); setRangeStart(getCurrentBiweeklyStart()); }}>Daily</button>
+            <button className={viewType === "weekly" ? "active" : ""} onClick={() => { setViewType("weekly"); setRangeStart(getCurrentBiweeklyStart()); }}>Weekly</button>
+            <button className={viewType === "bi-weekly" ? "active" : ""} onClick={() => { setViewType("bi-weekly"); setRangeStart(getCurrentBiweeklyStart()); }}>Bi-Weekly</button>
+            <button className={viewType === "monthly" ? "active" : ""} onClick={() => { setViewType("monthly"); setRangeStart(getCurrentBiweeklyStart()); }}>Monthly</button>
           </div>
-          <Button variant="primary" icon="print" onClick={() => window.print()}>Print schedule</Button>
+          <Button variant="primary" icon="print" onClick={() => window.print()}>Print Schedule</Button>
         </div>
       </section>
 
@@ -136,7 +144,7 @@ export default function EmployeeTab({ toast }: { toast: ToastFn }) {
         <div className="print-header">
           <div>
             <span className="eyebrow">Patient Transportation</span>
-            <h2>Team schedule</h2>
+            <h2>Team Schedule</h2>
             <p>{formatDateRange(dates[0], rangeEnd)}</p>
           </div>
           <div className="print-brand">Shiftline</div>
@@ -145,22 +153,22 @@ export default function EmployeeTab({ toast }: { toast: ToastFn }) {
         {assignments.length === 0 ? (
           <div className="empty-state">
             <Icon name="calendar" size={32} />
-            <h3>No published schedules yet</h3>
-            <p>Publish schedules from the Staffing Matrix to see them here.</p>
+            <h3>No Published Schedules Yet</h3>
+            <p>Publish Schedules From The Staffing Matrix To See Them Here.</p>
           </div>
         ) : (
           <div className="employee-table-wrap">
             <table className="employee-table">
               <thead>
                 <tr>
-                  <th>Team member</th>
+                  <th>Team Member</th>
                   {dates.map((date) => (
                     <th key={formatDateISO(date)} className={isWeekend(date) ? "weekend" : ""}>
                       {dayNames[date.getDay()]}
                       <span>{formatDate(date)}</span>
                     </th>
                   ))}
-                  <th>Total hours</th>
+                  <th>Total Hours</th>
                 </tr>
               </thead>
               <tbody>
@@ -179,10 +187,11 @@ export default function EmployeeTab({ toast }: { toast: ToastFn }) {
                         const a = getShift(member.id, dateISO);
                         const highlighted = isHighlighted(member.id, dateISO);
                         const shiftLabel = a ? formatShiftDisplay(a.shift_start, a.shift_end, a.status) : "-";
+                        const cellClass = a?.status === "Off" || !a ? "off" : a?.status === "Premium Pay" ? "premium-pay" : "";
                         return (
                           <td
                             key={dateISO}
-                            className={`${a?.status === "Off" || !a ? "off" : ""} ${highlighted ? "highlighted" : ""} ${isWeekend(date) ? "weekend" : ""}`}
+                            className={`${cellClass} ${highlighted ? "highlighted" : ""} ${isWeekend(date) ? "weekend" : ""}`}
                             onClick={() => toggleHighlight(member.id, dateISO)}
                             title="Click to toggle highlight"
                           >
@@ -199,10 +208,21 @@ export default function EmployeeTab({ toast }: { toast: ToastFn }) {
           </div>
         )}
 
+        <div className="schedule-note-published">
+          {note?.note_text ? (
+            <>
+              <strong>Schedule Notes</strong>
+              <span>{note.note_text}</span>
+            </>
+          ) : (
+            <span>&nbsp;</span>
+          )}
+        </div>
+
         <div className="print-note">
           <div className="note-header">
-            <strong>Schedule notes</strong>
-            <Button icon="save" onClick={saveNote}>Save note</Button>
+            <strong>Schedule Notes</strong>
+            <Button icon="save" onClick={saveNote}>Save Note</Button>
           </div>
           <textarea
             className="note-textarea"

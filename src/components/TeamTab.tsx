@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import type { AssignmentGroup, TeamMember, MemberStatus } from "../lib/types";
 import * as data from "../lib/data";
 import { Icon, Button, Modal, ConfirmBanner, type IconName } from "./ui";
-import { GROUP_COLORS, GROUP_COLOR_HEX, compactShift, inputToShiftTime, timeToInput, hoursLabel, shiftDuration } from "../lib/helpers";
+import { GROUP_COLORS, GROUP_COLOR_HEX, compactShift, inputToShiftTime, timeToInput, hoursLabel } from "../lib/helpers";
 
 const STATUS_OPTIONS: MemberStatus[] = ["Productive", "Training", "Vacation"];
 
@@ -18,6 +18,7 @@ export default function TeamTab() {
   const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<AssignmentGroup | null>(null);
   const [addingMember, setAddingMember] = useState(false);
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
+  const [editingMemberOriginalGroup, setEditingMemberOriginalGroup] = useState<string>("");
   const [memberSearch, setMemberSearch] = useState("");
   const [confirmRemoveMember, setConfirmRemoveMember] = useState(false);
   const [pendingGroupChange, setPendingGroupChange] = useState<{ member: TeamMember; targetGroupId: string; targetGroupName: string; sourceGroupName: string; action: "member" | "group" } | null>(null);
@@ -112,6 +113,23 @@ export default function TeamTab() {
 
   const handleSaveMember = async () => {
     if (!editingMember) return;
+    if (editingMember.group_id !== editingMemberOriginalGroup) {
+      const sourceGroup = groups.find((g) => g.id === editingMemberOriginalGroup);
+      const targetGroup = groups.find((g) => g.id === editingMember.group_id);
+      setPendingGroupChange({
+        member: editingMember,
+        targetGroupId: editingMember.group_id,
+        targetGroupName: targetGroup?.name || "",
+        sourceGroupName: sourceGroup?.name || "another group",
+        action: "member",
+      });
+      return;
+    }
+    await doSaveMember();
+  };
+
+  const doSaveMember = async () => {
+    if (!editingMember) return;
     try {
       await data.updateMember(editingMember.id, {
         name: editingMember.name,
@@ -140,6 +158,7 @@ export default function TeamTab() {
 
   const openMemberEdit = (member: TeamMember) => {
     setEditingMember({ ...member });
+    setEditingMemberOriginalGroup(member.group_id);
     setConfirmRemoveMember(false);
   };
 
@@ -155,7 +174,7 @@ export default function TeamTab() {
             <h1>Team</h1>
             <span className="status-pill">{members.length} members</span>
           </div>
-          <p>Manage team members, assignment groups, and onboarding status. Changes are saved automatically.</p>
+          <p>Manage Team Members, Assignment Groups, And Onboarding Status. Changes Are Saved Automatically.</p>
         </div>
         <div className="heading-actions">
           <Button icon="upload" onClick={() => alert("Excel roster import coming soon")}>Import roster</Button>
@@ -165,24 +184,24 @@ export default function TeamTab() {
 
       <section className="metrics">
         <article className="metric">
-          <div className="metric-top"><span>Total members</span></div>
+          <div className="metric-top"><span>Total Members</span></div>
           <div className="metric-value">{members.length}</div>
-          <small>Across all groups</small>
+          <small>Across All Groups</small>
         </article>
         <article className="metric">
           <div className="metric-top"><span>Productive</span><span className="trend good">{Math.round((productiveCount / Math.max(1, members.length)) * 100)}%</span></div>
           <div className="metric-value">{productiveCount}</div>
-          <small>Active and on duty</small>
+          <small>Active And On Duty</small>
         </article>
         <article className="metric">
-          <div className="metric-top"><span>In training</span></div>
+          <div className="metric-top"><span>In Training</span></div>
           <div className="metric-value">{trainingCount}</div>
-          <small>Non-productive, excluded from coverage</small>
+          <small>Non-Productive, Excluded From Coverage</small>
         </article>
         <article className="metric">
-          <div className="metric-top"><span>Assignment groups</span></div>
+          <div className="metric-top"><span>Assignment Groups</span></div>
           <div className="metric-value">{groups.length}</div>
-          <small>Job duty groups</small>
+          <small>Job Duty Groups</small>
         </article>
       </section>
 
@@ -191,7 +210,7 @@ export default function TeamTab() {
         <div className="team-mgmt-header">
           <h3>Assignment Groups</h3>
           <button className="team-create-btn" onClick={() => { setCreatingGroup(true); setNewGroupName(""); setNewGroupStart("06:00"); setNewGroupEnd("22:00"); }}>
-            <Icon name="plus" size={13} />New group
+            <Icon name="plus" size={13} />New Group
           </button>
         </div>
         <div className="team-chips-row">
@@ -199,7 +218,7 @@ export default function TeamTab() {
             <div key={g.id} className={`team-chip-item ${GROUP_COLORS[i % GROUP_COLORS.length]}`}>
               <span className="team-chip-name" onClick={() => setEditingGroup({ ...g })}>{g.name}</span>
               <span className="team-chip-count">{members.filter((m) => m.group_id === g.id).length}</span>
-              <button className="team-chip-delete" onClick={() => setConfirmDeleteGroup(g)} title="Delete group">
+              <button className="team-chip-delete" onClick={() => setConfirmDeleteGroup(g)} title="Delete Group">
                 <Icon name="x" size={12} />
               </button>
             </div>
@@ -247,15 +266,14 @@ export default function TeamTab() {
               {groupMembers.length === 0 ? (
                 <div className="team-empty">No members in this group yet.</div>
               ) : groupMembers.map((member) => {
-                const shiftHrs = shiftDuration(member.default_shift_start, member.default_shift_end) - member.daily_unpaid_break;
                 const initials = member.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
                 return (
                   <div key={member.id} className="team-member-card" onClick={() => openMemberEdit(member)}>
                     <div className={`team-avatar ${dutyClass(member.group_id)}`}>{initials}</div>
                     <div className="team-member-info">
                       <strong>{member.name}</strong>
-                                  <span className="team-member-meta">
-                        {hoursLabel(shiftHrs > 0 ? shiftHrs * 5 : 0)} this period · OT after {member.overtime_threshold} hrs
+                      <span className="team-member-meta">
+                        OT after {member.overtime_threshold} hrs
                       </span>
                     </div>
                     <span className={`team-status-badge ${(member.status || "productive").toLowerCase()}`}>{member.status}</span>
@@ -276,23 +294,23 @@ export default function TeamTab() {
       {/* Add Member Modal */}
       {addingMember && (
         <Modal
-          title="Add team member"
-          subtitle="New members start with no shifts — assign them in the Staffing Matrix."
+          title="Add Team Member"
+          subtitle="New Members Start With No Shifts — Assign Them In The Staffing Matrix."
           onClose={() => setAddingMember(false)}
           footer={
             <>
               <div />
               <div className="modal-actions-right">
                 <Button onClick={() => setAddingMember(false)}>Cancel</Button>
-                <Button variant="primary" onClick={handleAddMember}>Add member</Button>
+                <Button variant="primary" onClick={handleAddMember}>Add Member</Button>
               </div>
             </>
           }
         >
-          <label>Full name
+          <label>Full Name
             <input placeholder="e.g. Jordan Lee" value={mName} onChange={(e) => setMName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAddMember()} autoFocus />
           </label>
-          <label>Assignment group
+          <label>Assignment Group
             <select value={mGroup} onChange={(e) => setMGroup(e.target.value)}>
               {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
@@ -303,14 +321,14 @@ export default function TeamTab() {
             </select>
           </label>
           <div className="form-row-2">
-            <label>Expected weekly hours
+            <label>Expected Weekly Hours
               <input type="number" min="0" step="1" value={mWeeklyHours} onChange={(e) => setMWeeklyHours(Number(e.target.value) || 0)} />
             </label>
-            <label>Daily unpaid break (hours)
+            <label>Daily Unpaid Break (Hours)
               <input type="number" min="0" step="0.25" value={mBreak} onChange={(e) => setMBreak(Number(e.target.value) || 0)} />
             </label>
           </div>
-          <label>Overtime at (hours over)
+          <label>Overtime At (Hours Over)
             <input type="number" min="0" step="1" value={mOvertime} onChange={(e) => setMOvertime(Number(e.target.value) || 0)} />
           </label>
         </Modal>
@@ -319,8 +337,8 @@ export default function TeamTab() {
       {/* Edit Member Modal */}
       {editingMember && (
         <Modal
-          title="Edit team member"
-          subtitle="Update assignment group, status, shift, and pay details."
+          title="Edit Team Member"
+          subtitle="Update Assignment Group, Status, And Overtime Settings."
           onClose={() => { setEditingMember(null); setConfirmRemoveMember(false); }}
           footer={
             confirmRemoveMember ? null : (
@@ -328,16 +346,16 @@ export default function TeamTab() {
                 <button className="btn-remove-shift" onClick={() => setConfirmRemoveMember(true)}>Remove from team</button>
                 <div className="modal-actions-right">
                   <Button onClick={() => { setEditingMember(null); setConfirmRemoveMember(false); }}>Cancel</Button>
-                  <Button variant="primary" onClick={handleSaveMember}>Save changes</Button>
+                  <Button variant="primary" onClick={handleSaveMember}>Save Changes</Button>
                 </div>
               </>
             )
           }
         >
-          <label>Full name
+          <label>Full Name
             <input value={editingMember.name} onChange={(e) => setEditingMember({ ...editingMember, name: e.target.value })} />
           </label>
-          <label>Assignment group
+          <label>Assignment Group
             <select value={editingMember.group_id} onChange={(e) => setEditingMember({ ...editingMember, group_id: e.target.value })}>
               {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
@@ -348,16 +366,32 @@ export default function TeamTab() {
             </select>
           </label>
           <div className="form-row-2">
-            <label>Expected weekly hours
+            <label>Expected Weekly Hours
               <input type="number" min="0" step="1" value={editingMember.expected_weekly_hours} onChange={(e) => setEditingMember({ ...editingMember, expected_weekly_hours: Number(e.target.value) || 0 })} />
             </label>
-            <label>Daily unpaid break (hours)
+            <label>Daily Unpaid Break (Hours)
               <input type="number" min="0" step="0.25" value={editingMember.daily_unpaid_break} onChange={(e) => setEditingMember({ ...editingMember, daily_unpaid_break: Number(e.target.value) || 0 })} />
             </label>
           </div>
-          <label>Overtime at (hours over)
+          <label>Overtime At (Hours Over)
             <input type="number" min="0" step="1" value={editingMember.overtime_threshold} onChange={(e) => setEditingMember({ ...editingMember, overtime_threshold: Number(e.target.value) || 0 })} />
           </label>
+          {pendingGroupChange && pendingGroupChange.action === "member" && (
+            <ConfirmBanner
+              message={<>{pendingGroupChange.member.name} is currently assigned to <strong>{pendingGroupChange.sourceGroupName}</strong>. Move them to <strong>{pendingGroupChange.targetGroupName}</strong>? They will be removed from their current group.</>}
+              onCancel={() => setPendingGroupChange(null)}
+              onConfirm={async () => {
+                await data.updateMember(pendingGroupChange.member.id, { group_id: pendingGroupChange.targetGroupId });
+                await data.logChange(`Moved ${pendingGroupChange.member.name} from ${pendingGroupChange.sourceGroupName} to ${pendingGroupChange.targetGroupName}`, "Team");
+                setPendingGroupChange(null);
+                setEditingMember(null);
+                setConfirmRemoveMember(false);
+                await loadAll();
+              }}
+              cancelLabel="No, keep current"
+              confirmLabel="Yes, reassign"
+            />
+          )}
           {confirmRemoveMember && (
             <ConfirmBanner
               message={<>Remove <strong>{editingMember.name}</strong> from the team? This cannot be undone.</>}
@@ -373,23 +407,23 @@ export default function TeamTab() {
       {/* Create/Edit Group Modal */}
       {creatingGroup && (
         <Modal
-          title="New assignment group"
-          subtitle="Groups organize staff by job duty with their own hours and overtime rules."
+          title="New Assignment Group"
+          subtitle="Groups Organize Staff By Job Duty With Their Own Hours And Overtime Rules."
           onClose={() => setCreatingGroup(false)}
           footer={
             <>
               <div />
               <div className="modal-actions-right">
                 <Button onClick={() => setCreatingGroup(false)}>Cancel</Button>
-                <Button variant="primary" onClick={handleCreateGroup}>Create group</Button>
+                <Button variant="primary" onClick={handleCreateGroup}>Create Group</Button>
               </div>
             </>
           }
         >
-          <label>Group name
+          <label>Group Name
             <input placeholder="e.g. Emergency Department Transporter" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} autoFocus onKeyDown={(e) => e.key === "Enter" && handleCreateGroup()} />
           </label>
-          <label>Hours of operation
+          <label>Hours Of Operation
             <div className="shift-time-inputs">
               <div className="shift-time-field"><span>Start</span><input type="time" value={newGroupStart} onChange={(e) => setNewGroupStart(e.target.value)} /></div>
               <span className="shift-time-sep">to</span>
@@ -401,12 +435,12 @@ export default function TeamTab() {
 
       {editingGroup && (
         <Modal
-          title="Edit assignment group"
-          subtitle="Update hours, overtime rules, and base rate. See assigned members below."
+          title="Edit Assignment Group"
+          subtitle="Update Hours And Manage Assigned Members."
           onClose={() => setEditingGroup(null)}
           footer={
             <>
-              <button className="btn-remove-shift" onClick={() => { setConfirmDeleteGroup(editingGroup); }}>Delete group</button>
+              <button className="btn-remove-shift" onClick={() => { setConfirmDeleteGroup(editingGroup); }}>Delete Group</button>
               <div className="modal-actions-right">
                 <Button onClick={() => setEditingGroup(null)}>Cancel</Button>
                 <Button variant="primary" onClick={handleUpdateGroup}>Save changes</Button>
@@ -414,10 +448,10 @@ export default function TeamTab() {
             </>
           }
         >
-          <label>Group name
+          <label>Group Name
             <input value={editingGroup.name} onChange={(e) => setEditingGroup({ ...editingGroup, name: e.target.value })} />
           </label>
-          <label>Hours of operation
+          <label>Hours Of Operation
             <div className="shift-time-inputs">
               <div className="shift-time-field"><span>Start</span><input type="time" value={editingGroup.hours_of_service_start} onChange={(e) => setEditingGroup({ ...editingGroup, hours_of_service_start: e.target.value })} /></div>
               <span className="shift-time-sep">to</span>
@@ -431,10 +465,17 @@ export default function TeamTab() {
                 <div key={m.id} className="group-member-row">
                   <span>{m.name}</span>
                   <span className={`team-status-badge ${(m.status || "productive").toLowerCase()}`}>{m.status}</span>
-                  <button className="group-member-remove" onClick={async () => {
-                    await data.updateMember(m.id, { group_id: groups.find((g) => g.id !== editingGroup.id)?.id || "" });
-                    await loadAll();
-                    setEditingGroup((prev) => prev ? { ...prev } : null);
+                  <button className="group-member-remove" onClick={() => {
+                    const otherGroup = groups.find((g) => g.id !== editingGroup.id);
+                    if (otherGroup) {
+                      setPendingGroupChange({
+                        member: m,
+                        targetGroupId: otherGroup.id,
+                        targetGroupName: otherGroup.name,
+                        sourceGroupName: editingGroup.name,
+                        action: "group",
+                      });
+                    }
                   }} title="Remove from group"><Icon name="x" size={12} /></button>
                 </div>
               ))}
@@ -442,7 +483,44 @@ export default function TeamTab() {
                 <div className="team-empty">No members assigned to this group.</div>
               )}
             </div>
+            <div className="group-add-member-row">
+              <select value={memberToAddId} onChange={(e) => setMemberToAddId(e.target.value)}>
+                <option value="">Add existing member to this group...</option>
+                {members.filter((m) => m.group_id !== editingGroup.id).map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+              <Button variant="primary" icon="plus" onClick={() => {
+                if (!memberToAddId || !editingGroup) return;
+                const member = members.find((m) => m.id === memberToAddId);
+                if (!member) return;
+                const sourceGroup = groups.find((g) => g.id === member.group_id);
+                setPendingGroupChange({
+                  member,
+                  targetGroupId: editingGroup.id,
+                  targetGroupName: editingGroup.name,
+                  sourceGroupName: sourceGroup?.name || "another group",
+                  action: "group",
+                });
+                setMemberToAddId("");
+              }}>Add</Button>
+            </div>
           </div>
+          {pendingGroupChange && (
+            <ConfirmBanner
+              message={<>{pendingGroupChange.member.name} is currently assigned to <strong>{pendingGroupChange.sourceGroupName}</strong>. Move them to <strong>{pendingGroupChange.targetGroupName}</strong>? They will be removed from their current group.</>}
+              onCancel={() => setPendingGroupChange(null)}
+              onConfirm={async () => {
+                await data.updateMember(pendingGroupChange.member.id, { group_id: pendingGroupChange.targetGroupId });
+                await data.logChange(`Moved ${pendingGroupChange.member.name} from ${pendingGroupChange.sourceGroupName} to ${pendingGroupChange.targetGroupName}`, "Group");
+                setPendingGroupChange(null);
+                await loadAll();
+                setEditingGroup((prev) => prev ? { ...prev } : null);
+              }}
+              cancelLabel="No, keep current"
+              confirmLabel="Yes, reassign"
+            />
+          )}
           {confirmDeleteGroup && (
             <ConfirmBanner
               message={<>Delete assignment group <strong>"{confirmDeleteGroup.name}"</strong>? All members will lose their group assignment. This cannot be undone.</>}

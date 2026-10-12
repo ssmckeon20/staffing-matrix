@@ -1,5 +1,7 @@
 export type MemberStatus = "Productive" | "Training" | "Vacation";
-export type ShiftStatus = "Scheduled" | "Off" | "PTO" | "LOA" | "Vacation";
+export type ShiftStatus = "Scheduled" | "Off" | "PTO" | "LOA" | "Vacation" | "Premium Pay";
+
+export type PremiumPayType = "base_plus" | "rate_plus_percent" | "other";
 export type ViewType = "daily" | "weekly" | "bi-weekly" | "monthly";
 export type MatrixMode = "schedule" | "volume";
 
@@ -21,16 +23,16 @@ export interface TeamMember {
   group_id: string;
   name: string;
   status: MemberStatus;
-  default_shift_start: string;
-  default_shift_end: string;
+  default_shift_start?: string;
+  default_shift_end?: string;
   expected_weekly_hours: number;
   daily_unpaid_break: number;
   overtime_threshold: number;
-  hourly_rate: number;
-  premium_pay_enabled: boolean;
-  premium_rate: number;
-  premium_start_date: string | null;
-  premium_end_date: string | null;
+  hourly_rate?: number;
+  premium_pay_enabled?: boolean;
+  premium_rate?: number;
+  premium_start_date?: string | null;
+  premium_end_date?: string | null;
   display_order: number;
   created_at: string;
   updated_at: string;
@@ -46,6 +48,8 @@ export interface ShiftAssignment {
   status: ShiftStatus;
   is_published: boolean;
   borrowed_from_group_id: string | null;
+  premium_pay_type?: PremiumPayType | null;
+  premium_pay_amount?: number | null;
   created_at: string;
   updated_at: string;
 }

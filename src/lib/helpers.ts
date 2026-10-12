@@ -71,6 +71,7 @@ export const formatShiftDisplay = (start: string | null, end: string | null, sta
   if (status === "PTO") return "PTO";
   if (status === "LOA") return "LOA";
   if (status === "Vacation") return "Vac";
+  if (status === "Premium Pay") return `${start}-${end}`;
   if (!start || !end) return "-";
   return `${start}-${end}`;
 };

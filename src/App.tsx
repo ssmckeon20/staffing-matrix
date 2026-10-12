@@ -57,10 +57,6 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <button className="nav-item" title="Settings">
-            <Icon name="settings" />
-            <span>Settings</span>
-          </button>
           <div className="user-card">
             <div className="avatar">AD</div>
             <div>
