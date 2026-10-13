@@ -675,7 +675,7 @@ input, select {
 .legend-training { background: var(--warning); }
 .legend-ot { background: var(--error); }
 .legend-premium { background: #7c3aed; }
-.legend-diff-time { background: #f59e0b; opacity: 0.5; }
+.legend-diff-time { background: #2563eb; opacity: 0.5; }
 
 /* ========== Team Tabs ========== */
 .matrix-team-tabs {
@@ -934,12 +934,12 @@ input, select {
 }
 
 .shift-cell.diff-time {
-  background: rgba(245, 158, 11, 0.12);
-  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.4);
 }
 
 .shift-cell.diff-time span {
-  color: var(--warning);
+  color: var(--primary);
 }
 
 /* Date anchor row — shows day of week as a sticky reference */
@@ -2990,6 +2990,21 @@ input, select {
 
 .premium-pay-fields .form-row-2 {
   margin-top: 8px;
+}
+
+/* Lunch break override in editor */
+.lunch-break-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lunch-break-row input {
+  width: 80px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
 }
 
 /* Mini calendar for multi-day assignment */

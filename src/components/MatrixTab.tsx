@@ -36,6 +36,8 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
 
   // Per-assignment include-as-non-prod flag in the editor
   const [editIncludeNonProd, setEditIncludeNonProd] = useState<boolean>(false);
+  // Per-assignment lunch break override (in hours)
+  const [editLunchBreak, setEditLunchBreak] = useState<number | null>(null);
 
   // Collapsed hour rows
   const [collapsedHours, setCollapsedHours] = useState<Set<number>>(new Set());
@@ -240,7 +242,8 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       const shift = getMemberShiftForDate(member.id, dateISO);
       if (shiftCountsAsHours(shift.status, a) && shift.start && shift.end) {
         const dur = shiftDuration(shift.start, shift.end);
-        total += Math.max(0, dur - member.daily_unpaid_break);
+        const breakMins = a?.shift_override_break != null ? a.shift_override_break : member.daily_unpaid_break;
+        total += Math.max(0, dur - breakMins);
       }
     }
     return Math.round(total * 10) / 10;
@@ -255,7 +258,8 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       const shift = getMemberShiftForDate(member.id, dateISO);
       if (shiftCountsAsHours(shift.status, a) && shift.start && shift.end) {
         const dur = shiftDuration(shift.start, shift.end);
-        total += Math.max(0, dur - member.daily_unpaid_break);
+        const breakMins = a?.shift_override_break != null ? a.shift_override_break : member.daily_unpaid_break;
+        total += Math.max(0, dur - breakMins);
       }
     }
     return Math.round(total * 10) / 10;
@@ -283,8 +287,10 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       const dateISO = formatDateISO(date);
       const shift = getMemberShiftForDate(member.id, dateISO);
       if ((shift.status === "Scheduled" || shift.status === "Premium Pay") && shift.start && shift.end) {
+        const a = getMemberAssignment(member.id, dateISO);
         const dur = shiftDuration(shift.start, shift.end);
-        total += Math.max(0, dur - member.daily_unpaid_break);
+        const breakMins = a?.shift_override_break != null ? a.shift_override_break : member.daily_unpaid_break;
+        total += Math.max(0, dur - breakMins);
       }
     }
     return Math.round(total * 10) / 10;
@@ -326,7 +332,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           if ((shift.status === "Scheduled" || shift.status === "Premium Pay") && shift.start && shift.end) {
             const a = getMemberAssignment(member.id, dateISO);
             const rate = effectiveRate(a, member);
-            const dur = Math.max(0, shiftDuration(shift.start, shift.end) - member.daily_unpaid_break);
+            const dur = Math.max(0, shiftDuration(shift.start, shift.end) - (a?.shift_override_break != null ? a.shift_override_break : member.daily_unpaid_break));
             memberTotal += rate * dur;
             weekHours += dur;
           }
@@ -485,6 +491,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       setEditPremiumType(a?.premium_pay_type || "");
       setEditPremiumAmount(a?.premium_pay_amount || 0);
       setEditIncludeNonProd(false);
+      setEditLunchBreak(a?.shift_override_break != null ? a.shift_override_break : null);
     } else if (shift.status !== "Scheduled" && shift.status !== "Off" && shift.status !== "Premium Pay") {
       setEditStart("");
       setEditEnd("");
@@ -493,6 +500,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       setEditPremiumAmount(0);
       const a = getMemberAssignment(member.id, dateISO);
       setEditIncludeNonProd(a?.include_as_non_prod || false);
+      setEditLunchBreak(null);
     } else {
       setEditStart(`${String(hour).padStart(2, "0")}:00`);
       setEditEnd(slotEndForHour(hour));
@@ -500,6 +508,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       setEditPremiumType("");
       setEditPremiumAmount(0);
       setEditIncludeNonProd(false);
+      setEditLunchBreak(null);
     }
     setEditorOpen(true);
   };
@@ -536,6 +545,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           premium_pay_type: premiumType as any,
           premium_pay_amount: premiumAmt as any,
           include_as_non_prod: includeNonProd,
+          shift_override_break: (editStatus === "Scheduled" || editStatus === "Premium Pay") ? editLunchBreak : null,
         });
       }
       await data.logChange(`Updated ${editingMember.name}'s shift on ${editingDate} in ${currentGroup?.name}${datesToSave.length > 1 ? ` (${datesToSave.length} days)` : ""}`, "Matrix");
@@ -560,6 +570,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                 premium_pay_type: prior.data.premium_pay_type as any,
                 premium_pay_amount: prior.data.premium_pay_amount as any,
                 include_as_non_prod: prior.data.include_as_non_prod || false,
+                shift_override_break: prior.data.shift_override_break ?? null,
               });
             } else {
               await data.deleteShiftAssignment(editingMember.id, prior.dateISO);
@@ -623,6 +634,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
             premium_pay_type: prior.premium_pay_type as any,
             premium_pay_amount: prior.premium_pay_amount as any,
             include_as_non_prod: prior.include_as_non_prod || false,
+            shift_override_break: prior.shift_override_break ?? null,
           });
         },
       }]);
@@ -794,6 +806,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           premium_pay_type: a.premium_pay_type as any,
           premium_pay_amount: a.premium_pay_amount as any,
           include_as_non_prod: a.include_as_non_prod || false,
+          shift_override_break: a.shift_override_break ?? null,
         });
     }
     await data.logChange(`Copied schedule from previous period for ${currentGroup?.name}`, "Matrix");
@@ -1354,13 +1367,33 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
             </label>
           )}
           {(editStatus === "Scheduled" || editStatus === "Premium Pay") && (
-            <label>Shift Time
-              <div className="shift-time-inputs">
-                <div className="shift-time-field"><span>Start</span><input type="time" value={editStart} onChange={(e) => setEditStart(e.target.value)} /></div>
-                <span className="shift-time-sep">→</span>
-                <div className="shift-time-field"><span>End</span><input type="time" value={editEnd} onChange={(e) => setEditEnd(e.target.value)} /></div>
-              </div>
-            </label>
+            <>
+              <label>Shift Time
+                <div className="shift-time-inputs">
+                  <div className="shift-time-field"><span>Start</span><input type="time" value={editStart} onChange={(e) => setEditStart(e.target.value)} /></div>
+                  <span className="shift-time-sep">→</span>
+                  <div className="shift-time-field"><span>End</span><input type="time" value={editEnd} onChange={(e) => setEditEnd(e.target.value)} /></div>
+                </div>
+              </label>
+              <label>Add Lunch Break (hours)
+                <div className="lunch-break-row">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    placeholder={String(editingMember.daily_unpaid_break)}
+                    value={editLunchBreak ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value === "" ? null : Number(e.target.value);
+                      setEditLunchBreak(val);
+                    }}
+                  />
+                  <span className="modal-hint" style={{ margin: 0 }}>
+                    Default: {editingMember.daily_unpaid_break} hrs (from Team tab). Enter a different value to override for this shift only.
+                  </span>
+                </div>
+              </label>
+            </>
           )}
           {editStatus === "Premium Pay" && (
             <div className="premium-pay-fields">

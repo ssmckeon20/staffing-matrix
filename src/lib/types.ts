@@ -51,6 +51,7 @@ export interface ShiftAssignment {
   premium_pay_type?: PremiumPayType | null;
   premium_pay_amount?: number | null;
   include_as_non_prod?: boolean;
+  shift_override_break?: number | null;
   created_at: string;
   updated_at: string;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
-import type { TeamMember, ShiftAssignment, AssignmentGroup, ScheduleNote, ScheduleHighlight, ViewType, ShiftStatus } from "../lib/types";
+import type { TeamMember, ShiftAssignment, AssignmentGroup, ScheduleNote, ScheduleHighlight, ViewType } from "../lib/types";
 import * as data from "../lib/data";
 import { Icon, Button } from "./ui";
 import {
@@ -31,7 +31,10 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
   const [lastPublished, setLastPublished] = useState<string>("");
   const [showGroupFilter, setShowGroupFilter] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set());
-  const [dismissedChanges, setDismissedChanges] = useState<Set<string>>(new Set());
+  const [highlightChanges, setHighlightChanges] = useState<boolean>(() => {
+    if (typeof localStorage === "undefined") return true;
+    return localStorage.getItem("highlightChanges") !== "false";
+  });
 
   const dates = useMemo(() => getDateRange(viewType, rangeStart), [viewType, rangeStart]);
   const rangeEnd = dates[dates.length - 1];
@@ -57,11 +60,9 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
       setNoteText(n?.note_text || "");
       setSelectedGroupIds(new Set(g.map((grp) => grp.id)));
 
-      // Fetch prior period assignments for change detection
       const prev = await data.fetchPublishedAssignments(prevPeriodStart, prevPeriodEnd);
       setPrevAssignments(prev);
 
-      // Find latest published date across groups
       const allGroups = await Promise.all(g.map((grp) => data.fetchPublishedState(grp.id)));
       const publishedDates = allGroups.filter(Boolean).map((ps) => ps?.last_published_at).filter(Boolean);
       if (publishedDates.length > 0) {
@@ -102,7 +103,6 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
   const hasShiftChanged = (memberId: string, currentDate: Date): boolean => {
     const dateISO = formatDateISO(currentDate);
     const current = getShift(memberId, dateISO);
-    // Find the same day-of-week in the same week position in the prior period
     const daysFromStart = Math.floor((currentDate.getTime() - dates[0].getTime()) / (1000 * 60 * 60 * 24));
     const weekIndex = Math.floor(daysFromStart / 7);
     const dayInWeek = daysFromStart % 7;
@@ -121,23 +121,30 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
     return highlights.some((h) => h.member_id === memberId && h.highlight_date === dateISO);
   };
 
+  // Clicking a cell toggles a persisted highlight in the database
   const toggleHighlight = async (memberId: string, dateISO: string) => {
-    const changeKey = `${memberId}:${dateISO}`;
-    // If this is an auto change highlight, dismiss it instead
-    if (dismissedChanges.has(changeKey)) {
-      // Already dismissed — toggle manual highlight
-      await data.toggleHighlight(memberId, dateISO);
-      const h = await data.fetchHighlights();
-      setHighlights(h);
-    } else if (hasShiftChanged(memberId, new Date(dateISO + "T00:00:00")) && !isHighlighted(memberId, dateISO)) {
-      // Auto change highlight is showing and no manual highlight — dismiss it
-      setDismissedChanges((prev) => new Set(prev).add(changeKey));
-    } else {
-      // Toggle manual highlight
-      await data.toggleHighlight(memberId, dateISO);
-      const h = await data.fetchHighlights();
-      setHighlights(h);
-    }
+    await data.toggleHighlight(memberId, dateISO);
+    const h = await data.fetchHighlights();
+    setHighlights(h);
+  };
+
+  // A cell shows the change highlight when:
+  // - highlightChanges is ON and the shift changed from prior period, OR
+  // - the user manually highlighted it
+  // A cell shows NO highlight when the user manually dismissed it (toggled highlight off)
+  const cellShowsChangeHighlight = (memberId: string, date: Date): boolean => {
+    const dateISO = formatDateISO(date);
+    const changed = hasShiftChanged(memberId, date);
+    if (!changed) return false;
+    if (!highlightChanges) return false;
+    // If user manually highlighted this cell, the manual highlight takes precedence
+    if (isHighlighted(memberId, dateISO)) return false;
+    return true;
+  };
+
+  const toggleHighlightChanges = (val: boolean) => {
+    setHighlightChanges(val);
+    if (typeof localStorage !== "undefined") localStorage.setItem("highlightChanges", String(val));
   };
 
   const saveNote = async () => {
@@ -153,7 +160,8 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
       const a = getShift(member.id, dateISO);
       if (a && (a.status === "Scheduled" || a.status === "Premium Pay") && a.shift_start && a.shift_end) {
         const dur = shiftDuration(a.shift_start, a.shift_end);
-        total += Math.max(0, dur - member.daily_unpaid_break);
+        const breakMins = a.shift_override_break != null ? a.shift_override_break : member.daily_unpaid_break;
+        total += Math.max(0, dur - breakMins);
       }
     }
     return Math.round(total * 10) / 10;
@@ -185,11 +193,7 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
 
   if (loading) return <div className="page"><p>Loading...</p></div>;
 
-  // Filter members by selected groups and those who have published assignments
-  const visibleMembers = members.filter((m) => {
-    if (!selectedGroupIds.has(m.group_id)) return false;
-    return true;
-  });
+  const visibleMembers = members.filter((m) => selectedGroupIds.has(m.group_id));
   const publishedMembers = visibleMembers.filter((m) =>
     m.status !== "Vacation" || assignments.some((a) => a.member_id === m.id && a.is_published)
   );
@@ -231,6 +235,10 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
         <span>Last published: <strong>{lastPublished || "Not yet published"}</strong></span>
         <span className="separator">·</span>
         <span>{formatDateRange(dates[0], rangeEnd)}</span>
+        <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "16px" }}>
+          <input type="checkbox" checked={highlightChanges} onChange={(e) => toggleHighlightChanges(e.target.checked)} />
+          <span>Highlight all schedule changes from prior period</span>
+        </label>
         <div className="group-filter-dropdown" style={{ marginLeft: "auto" }}>
           <button className="group-filter-btn" onClick={() => setShowGroupFilter((v) => !v)}>
             <Icon name="team" size={14} />
@@ -322,17 +330,18 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
                       {dates.map((date) => {
                         const dateISO = formatDateISO(date);
                         const a = getShift(member.id, dateISO);
-                        const highlighted = isHighlighted(member.id, dateISO);
-                        const changeKey = `${member.id}:${dateISO}`;
-                        const changed = hasShiftChanged(member.id, date) && !dismissedChanges.has(changeKey);
+                        const manualHighlight = isHighlighted(member.id, dateISO);
+                        const autoChangeHighlight = cellShowsChangeHighlight(member.id, date);
                         const shiftLabel = a ? formatShiftDisplay(a.shift_start, a.shift_end, a.status) : "-";
-                        const cellClass = a?.status === "Off" || !a ? "off" : a?.status === "PTO" || a?.status === "LOA" || a?.status === "Vacation" ? "leave" : a?.status === "Premium Pay" ? "premium-pay" : "";
+                        const isLeaveStatus = a?.status === "PTO" || a?.status === "LOA" || a?.status === "Vacation";
+                        const cellClass = a?.status === "Off" || !a ? "off" : isLeaveStatus ? "leave" : a?.status === "Premium Pay" ? "premium-pay" : "";
+                        const showChangeHighlight = autoChangeHighlight && !manualHighlight;
                         return (
                           <td
                             key={dateISO}
-                            className={`${cellClass} ${highlighted ? "highlighted" : ""} ${changed ? "change-highlighted" : ""} ${isWeekend(date) ? "weekend" : ""}`}
+                            className={`${cellClass} ${manualHighlight ? "highlighted" : ""} ${showChangeHighlight ? "change-highlighted" : ""} ${isWeekend(date) ? "weekend" : ""}`}
                             onClick={() => toggleHighlight(member.id, dateISO)}
-                            title={changed ? "Schedule changed from previous period — click to dismiss highlight" : "Click to toggle highlight"}
+                            title={showChangeHighlight ? "Schedule changed from previous period — click to toggle highlight" : "Click to toggle highlight"}
                           >
                             {shiftLabel}
                           </td>
