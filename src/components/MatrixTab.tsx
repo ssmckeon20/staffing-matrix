@@ -717,7 +717,12 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
 
   const shiftViewType = (newType: ViewType) => {
     setViewType(newType);
-    setRangeStart(getCurrentBiweeklyStart());
+    const ppStart = new Date(payPeriodStart + "T00:00:00");
+    const now = new Date();
+    const diffDays = Math.floor((now.getTime() - ppStart.getTime()) / (1000 * 60 * 60 * 24));
+    const periodLen = newType === "bi-weekly" ? 14 : newType === "monthly" ? 30 : newType === "daily" ? 1 : 7;
+    const periodsElapsed = Math.floor(diffDays / periodLen);
+    setRangeStart(addDays(ppStart, periodsElapsed * periodLen));
   };
 
   const publishedInfo = publishedStates[selectedGroup];
