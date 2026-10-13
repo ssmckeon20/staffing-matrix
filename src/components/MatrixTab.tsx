@@ -4,7 +4,7 @@ import type { AssignmentGroup, TeamMember, ShiftAssignment, VolumePlan, FteBudge
 import * as data from "../lib/data";
 import { Icon, Button, Modal } from "./ui";
 import {
-  GROUP_COLORS, getCurrentBiweeklyStart, getDateRange, formatDateRange, formatDateISO, addDays,
+  GROUP_COLORS, getDateRange, formatDateRange, formatDateISO, addDays,
   dayNames, isWeekend, generateHourLabels, hourLabel, formatHour24, slotEndForHour,
   inputTimeValue, shiftDuration, isActiveAt, formatShiftDisplay, hoursLabel,
   formatDate,
@@ -12,7 +12,16 @@ import {
 
 interface ToastFn { (msg: string): void; }
 
-export default function MatrixTab({ toast }: { toast: ToastFn }) {
+interface SharedDateProps {
+  viewType: ViewType;
+  setViewType: (v: ViewType) => void;
+  rangeStart: Date;
+  setRangeStart: (d: Date) => void;
+  payPeriodStart: string;
+  setPayPeriodStart: (s: string) => void;
+}
+
+export default function MatrixTab({ toast, viewType, setViewType, rangeStart, setRangeStart, payPeriodStart, setPayPeriodStart }: { toast: ToastFn } & SharedDateProps) {
   const [groups, setGroups] = useState<AssignmentGroup[]>([]);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [assignments, setAssignments] = useState<ShiftAssignment[]>([]);
@@ -24,13 +33,11 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
 
   const [selectedGroup, setSelectedGroup] = useState<string>("");
   const [matrixMode, setMatrixMode] = useState<MatrixMode>("schedule");
-  const [viewType, setViewType] = useState<ViewType>("bi-weekly");
-  const [rangeStart, setRangeStart] = useState<Date>(getCurrentBiweeklyStart());
 
-  // Payroll period start — user-configurable to match company pay periods
-  const [payPeriodStart, setPayPeriodStart] = useState<string>(() => {
-    const stored = typeof localStorage !== "undefined" && localStorage.getItem("payPeriodStart");
-    return stored || formatDateISO(getCurrentBiweeklyStart());
+  // Include alt-status hours (PTO, LOA, Vacation) in non-productive totals
+  const [includeAltAsNonProd, setIncludeAltAsNonProd] = useState<boolean>(() => {
+    if (typeof localStorage === "undefined") return false;
+    return localStorage.getItem("includeAltAsNonProd") === "true";
   });
 
   // Collapsed hour rows
@@ -148,7 +155,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
     const periodsElapsed = Math.floor(diffDays / 14);
     const currentPeriodStart = addDays(ppStart, periodsElapsed * 14);
     setRangeStart(currentPeriodStart);
-  }, [payPeriodStart]);
+  }, [payPeriodStart]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Navigate by full pay periods (14 days for bi-weekly, 7 for weekly/daily, 30 for monthly)
   const navigatePeriod = (direction: number) => {
@@ -213,13 +220,20 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
     return { start: null, end: null, status: "Off" };
   };
 
+  // Check if a shift counts as hours (scheduled, premium, or alt-status if included)
+  const shiftCountsAsHours = (status: ShiftStatus): boolean => {
+    if (status === "Scheduled" || status === "Premium Pay") return true;
+    if (includeAltAsNonProd && (status === "PTO" || status === "LOA" || status === "Vacation")) return true;
+    return false;
+  };
+
   // Calculate scheduled hours for a member across all dates (excluding unpaid breaks)
   const memberScheduledHours = (member: TeamMember): number => {
     let total = 0;
     for (const date of dates) {
       const dateISO = formatDateISO(date);
       const shift = getMemberShiftForDate(member.id, dateISO);
-      if ((shift.status === "Scheduled" || shift.status === "Premium Pay") && shift.start && shift.end) {
+      if (shiftCountsAsHours(shift.status) && shift.start && shift.end) {
         const dur = shiftDuration(shift.start, shift.end);
         total += Math.max(0, dur - member.daily_unpaid_break);
       }
@@ -233,7 +247,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
     for (const date of dateList) {
       const dateISO = formatDateISO(date);
       const shift = getMemberShiftForDate(member.id, dateISO);
-      if ((shift.status === "Scheduled" || shift.status === "Premium Pay") && shift.start && shift.end) {
+      if (shiftCountsAsHours(shift.status) && shift.start && shift.end) {
         const dur = shiftDuration(shift.start, shift.end);
         total += Math.max(0, dur - member.daily_unpaid_break);
       }
@@ -323,7 +337,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
     return Math.round(total * 100) / 100;
   }, [groupMembers, assignments, dates]);
 
-  // Cross-group totals
+  // Cross-group totals — FTE = avg weekly hours across all groups / 40
   const allGroupsFte = useMemo(() => {
     let totalProductive = 0;
     let totalNonProductive = 0;
@@ -345,7 +359,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
       totalHours: weeklyAvgHours,
       totalLaborSpend: 0,
     };
-  }, [groups, members, assignments, effectiveDates, numWeeks]);
+  }, [groups, members, assignments, effectiveDates, numWeeks, includeAltAsNonProd]);
 
   // FTE calculations with productive/non-productive split (weekly averages)
   const fteCalculations = useMemo(() => {
@@ -361,7 +375,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
         for (const date of weekDates) {
           const dateISO = formatDateISO(date);
           const shift = getMemberShiftForDate(member.id, dateISO);
-          if ((shift.status === "Scheduled" || shift.status === "Premium Pay") && shift.start && shift.end) {
+          if (shiftCountsAsHours(shift.status) && shift.start && shift.end) {
             total += shiftDuration(shift.start, shift.end);
           }
         }
@@ -380,7 +394,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
     const fteVariance = budget > 0 ? Math.round((totalFTE / budget) * 100) : 0;
     const fteOutOfRange = budget > 0 && (fteVariance < 95 || fteVariance > 105);
     return { week1Productive: weekProductive[0] || 0, week2Productive: weekProductive[1] || 0, week1NonProd: weekNonProd[0] || 0, week2NonProd: weekNonProd[1] || 0, totalProductive: avgProductive, totalNonProd: avgNonProd, totalHours, totalFTE, budget, fteVariance, fteOutOfRange };
-  }, [groupMembers, assignments, effectiveDates, numWeeks, selectedGroup, fteBudgets]);
+  }, [groupMembers, assignments, effectiveDates, numWeeks, selectedGroup, fteBudgets, includeAltAsNonProd]);
 
   // Staff at each hour per day
   const staffAtHour = (hour: number, date: Date): number => {
@@ -619,7 +633,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
 
   const handlePublish = async () => {
     if (!currentGroup) return;
-    await data.publishSchedule(selectedGroup, currentGroup.name);
+    await data.publishSchedule(selectedGroup, currentGroup.name, dates[0], rangeEnd);
     if (typeof localStorage !== "undefined") localStorage.removeItem(`slotAdj_${selectedGroup}`);
     setSlotAdjustments({});
     const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
@@ -643,7 +657,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
 
   const handleRevert = async () => {
     if (!currentGroup) return;
-    await data.revertToLastPublished(selectedGroup, currentGroup.name);
+    await data.revertToLastPublished(selectedGroup, currentGroup.name, dates[0], rangeEnd);
     if (typeof localStorage !== "undefined") localStorage.removeItem(`slotAdj_${selectedGroup}`);
     setSlotAdjustments({});
     const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
@@ -725,6 +739,11 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
     setRangeStart(addDays(ppStart, periodsElapsed * periodLen));
   };
 
+  const toggleIncludeAltAsNonProd = (val: boolean) => {
+    setIncludeAltAsNonProd(val);
+    if (typeof localStorage !== "undefined") localStorage.setItem("includeAltAsNonProd", String(val));
+  };
+
   const publishedInfo = publishedStates[selectedGroup];
   const publishedLabel = publishedInfo?.last_published_at
     ? new Date(publishedInfo.last_published_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })
@@ -794,6 +813,10 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
           <label>Pay Period Start:</label>
           <input type="date" value={payPeriodStart} onChange={(e) => { setPayPeriodStart(e.target.value); if (typeof localStorage !== "undefined") localStorage.setItem("payPeriodStart", e.target.value); }} />
         </div>
+        <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+          <input type="checkbox" checked={includeAltAsNonProd} onChange={(e) => toggleIncludeAltAsNonProd(e.target.checked)} />
+          <span>Include PTO/LOA/Vacation as non-productive hours</span>
+        </label>
         {matrixMode === "schedule" && (
           <button className="copy-schedule-btn" onClick={() => setShowCopyPrompt(true)}>
             <Icon name="refresh" size={13} /> Copy From Previous Period
@@ -886,10 +909,10 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
                 {matrixMode === "schedule" && (
                   <div className="legend">
                     <span><i className="legend-good" />Scheduled</span>
-                    <span><i className="legend-low" />Open</span>
                     <span><i className="legend-training" />Non-Productive</span>
                     <span><i className="legend-ot" />Overtime</span>
                     <span><i className="legend-premium" />Premium Pay</span>
+                    <span><i className="legend-diff-time" />Different Shift Time</span>
                   </div>
                 )}
               </div>
@@ -916,6 +939,14 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
                         <th key={formatDateISO(date)} className={isWeekend(date) ? "weekend" : ""}>
                           <strong>{dayNames[date.getDay()]}</strong>
                           <span>{formatDate(date)}</span>
+                        </th>
+                      ))}
+                    </tr>
+                    <tr className="date-anchor-row">
+                      <th colSpan={2} />
+                      {dates.map((date) => (
+                        <th key={formatDateISO(date)} className={isWeekend(date) ? "weekend" : ""}>
+                          <small>{dayNames[date.getDay()]}</small>
                         </th>
                       ))}
                     </tr>
@@ -952,6 +983,14 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
                             const schedHrs = memberScheduledHours(member);
                             const otHrs = memberOvertimeHours(member);
                             const isOT = otHrs > 0;
+                            // Determine which hours this member actually has shifts at
+                            const memberShiftHours = new Set<number>();
+                            for (const d of dates) {
+                              const sh = getMemberShiftForDate(member.id, formatDateISO(d));
+                              if ((sh.status === "Scheduled" || sh.status === "Premium Pay") && sh.start) {
+                                memberShiftHours.add(parseInt(sh.start.split(":")[0]));
+                              }
+                            }
                             return (
                               <tr key={member.id} className={`employee-row ${member.status !== "Productive" ? "nonproductive-row" : ""}`}>
                                 <td>
@@ -1004,11 +1043,12 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
                                   const dateISO = formatDateISO(date);
                                   const shift = getMemberShiftForDate(member.id, dateISO);
                                   const cellLabel = formatShiftDisplay(shift.start, shift.end, shift.status);
+                                  const isDiffTime = (shift.status === "Scheduled" || shift.status === "Premium Pay") && shift.start && parseInt(shift.start.split(":")[0]) !== hour;
                                   const cellClass = shift.status === "Off" ? "off" : shift.status === "PTO" || shift.status === "LOA" || shift.status === "Vacation" ? "leave" : shift.status === "Premium Pay" ? "premium-pay" : isOT ? "ot-cell" : "";
                                   return (
                                     <td key={dateISO} className={isWeekend(date) ? "weekend" : ""}>
                                       <button
-                                        className={`shift-cell ${cellClass}`}
+                                        className={`shift-cell ${cellClass} ${isDiffTime ? "diff-time" : ""}`}
                                         onClick={() => openEditor(member, date, hour)}
                                       >
                                         <span>{cellLabel}</span>
@@ -1019,33 +1059,6 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
                               </tr>
                             );
                           })}
-                          {!isCollapsed && Array.from({ length: openSlots }, (_, i) => (
-                            <tr key={`open-${hour}-${i}`} className="open-slot-row">
-                              <td className="open-slot-status-cell">
-                                <span className="open-slot-badge">Open</span>
-                                <button className="row-delete-btn open-slot-delete-btn" onClick={() => {
-                                  updateSlotAdjustment(hour, -1);
-                                  setHasDraftChanges(true);
-                                  toast(`Removed open slot at ${formatHour24(hour)}`);
-                                }} aria-label="Remove open slot" title="Remove open slot">&#x2715;</button>
-                              </td>
-                              <td className="name-cell open-slot-name-cell">
-                                <button className="assign-slot-btn" onClick={() => { setAssignPanel({ hour, dateISO: null }); setAssignSearch(""); setBorrowMode(false); }}>
-                                  <Icon name="plus" size={13} />Assign employee
-                                </button>
-                              </td>
-                              {dates.map((date) => {
-                                const dateISO = formatDateISO(date);
-                                return (
-                                  <td key={dateISO} className={`open-slot-day ${isWeekend(date) ? "weekend" : ""}`}>
-                                    <button className="shift-cell open-slot-shift" onClick={() => { setAssignPanel({ hour, dateISO }); setAssignSearch(""); setBorrowMode(false); }}>
-                                      <span>{`${formatHour24(hour)}-${slotEndForHour(hour)}`}</span>
-                                    </button>
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          ))}
                           {/* Subtotal row — always visible */}
                           <tr className={`shift-subtotal-row ${isCollapsed ? "collapsed" : ""}`}>
                             <td colSpan={2} className="shift-subtotal-label">Staff at {formatHour24(hour)}</td>

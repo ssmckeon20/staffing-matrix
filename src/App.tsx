@@ -4,6 +4,8 @@ import TeamTab from "./components/TeamTab";
 import MatrixTab from "./components/MatrixTab";
 import EmployeeTab from "./components/EmployeeTab";
 import HistoryTab from "./components/HistoryTab";
+import type { ViewType } from "./lib/types";
+import { getCurrentBiweeklyStart, formatDateISO } from "./lib/helpers";
 
 type View = "team" | "matrix" | "employee" | "history";
 
@@ -18,6 +20,14 @@ function App() {
   const [view, setView] = useState<View>("team");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toast, setToast] = useState("");
+
+  // Shared date range state across Matrix and Employee tabs
+  const [viewType, setViewType] = useState<ViewType>("bi-weekly");
+  const [rangeStart, setRangeStart] = useState<Date>(getCurrentBiweeklyStart());
+  const [payPeriodStart, setPayPeriodStart] = useState<string>(() => {
+    const stored = typeof localStorage !== "undefined" && localStorage.getItem("payPeriodStart");
+    return stored || formatDateISO(getCurrentBiweeklyStart());
+  });
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -35,7 +45,7 @@ function App() {
             onClick={() => setSidebarCollapsed((c) => !c)}
             aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
-            <Icon name={sidebarCollapsed ? "chevronRight" : "chevronLeft"} size={14} />
+            <Icon name={sidebarCollapsed ? "chevronLeft" : "chevronRight"} size={14} />
           </button>
         </div>
         <div className="facility">
@@ -77,8 +87,28 @@ function App() {
         </header>
 
         {view === "team" && <TeamTab />}
-        {view === "matrix" && <MatrixTab toast={notify} />}
-        {view === "employee" && <EmployeeTab toast={notify} />}
+        {view === "matrix" && (
+          <MatrixTab
+            toast={notify}
+            viewType={viewType}
+            setViewType={setViewType}
+            rangeStart={rangeStart}
+            setRangeStart={setRangeStart}
+            payPeriodStart={payPeriodStart}
+            setPayPeriodStart={setPayPeriodStart}
+          />
+        )}
+        {view === "employee" && (
+          <EmployeeTab
+            toast={notify}
+            viewType={viewType}
+            setViewType={setViewType}
+            rangeStart={rangeStart}
+            setRangeStart={setRangeStart}
+            payPeriodStart={payPeriodStart}
+            setPayPeriodStart={setPayPeriodStart}
+          />
+        )}
         {view === "history" && <HistoryTab />}
       </main>
 

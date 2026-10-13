@@ -672,10 +672,10 @@ input, select {
 }
 
 .legend-good { background: var(--success); }
-.legend-low { background: var(--error); }
 .legend-training { background: var(--warning); }
 .legend-ot { background: var(--error); }
 .legend-premium { background: #7c3aed; }
+.legend-diff-time { background: #f59e0b; opacity: 0.5; }
 
 /* ========== Team Tabs ========== */
 .matrix-team-tabs {
@@ -930,6 +930,34 @@ input, select {
 .shift-cell.leave {
   color: var(--warning);
   background: var(--warning-light);
+  font-weight: 600;
+}
+
+.shift-cell.diff-time {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.shift-cell.diff-time span {
+  color: var(--warning);
+}
+
+/* Date anchor row — shows day of week as a sticky reference */
+.date-anchor-row th {
+  padding: 2px 8px !important;
+  font-size: 10px !important;
+  color: var(--text-3) !important;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-light);
+  position: sticky;
+  top: 42px;
+  z-index: 4;
+}
+
+.date-anchor-row small {
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 /* Open slot rows */
@@ -2733,6 +2761,95 @@ input, select {
   background: #fef08a;
 }
 
+.employee-table td.change-highlighted {
+  background: #fef9c3;
+  border: 2px solid #f59e0b;
+}
+
+.employee-table td.change-highlighted:hover {
+  background: #fef08a;
+}
+
+.employee-table td.leave {
+  color: var(--warning);
+  background: var(--warning-light);
+  font-weight: 600;
+}
+
+.employee-table td.premium-pay {
+  color: #7c3aed;
+  background: #f5f3ff;
+}
+
+.employee-table .week-band th {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  text-align: center;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  padding: 6px;
+}
+
+/* Group filter dropdown */
+.group-filter-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.group-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.12s;
+}
+
+.group-filter-btn:hover {
+  border-color: var(--text-3);
+}
+
+.group-filter-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  z-index: 50;
+  min-width: 200px;
+  padding: 8px;
+}
+
+.group-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+
+.group-filter-item:hover {
+  background: var(--surface-2);
+}
+
+.group-filter-item input {
+  cursor: pointer;
+}
+
 .employee-table td {
   cursor: pointer;
   transition: background 0.12s;
@@ -2961,7 +3078,7 @@ input, select {
   .sidebar, .topbar, .heading-actions, .matrix-footer,
   .view-type-bar, .matrix-action-bar, .published-info-bar,
   .matrix-group-tabs, .metrics, .note-header button,
-  .copy-schedule-btn {
+  .copy-schedule-btn, .group-filter-dropdown {
     display: none !important;
   }
   .main {
@@ -2970,8 +3087,17 @@ input, select {
   body {
     background: #fff;
   }
-  .employee-table td.highlighted {
+  .employee-table td.highlighted,
+  .employee-table td.change-highlighted {
     background: #fef9c3 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .employee-table td.change-highlighted {
+    border: 2px solid #f59e0b !important;
+  }
+  .employee-table td.leave {
+    background: var(--warning-light) !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }

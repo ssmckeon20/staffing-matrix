@@ -10,7 +10,7 @@ import type {
   ChangeHistoryEntry,
   PublishedState,
 } from "./types";
-import { getCurrentBiweeklyStart, formatDateISO, addDays } from "./helpers";
+import { formatDateISO } from "./helpers";
 
 export async function logChange(actionText: string, category: string = "General", userName: string = "Admin") {
   await supabase.from("change_history").insert({
@@ -139,6 +139,21 @@ export async function fetchShiftAssignments(
     .from("shift_assignments")
     .select("*")
     .eq("group_id", groupId)
+    .gte("assignment_date", startISO)
+    .lte("assignment_date", endISO);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function fetchAllAssignmentsInRange(
+  startDate: Date,
+  endDate: Date
+): Promise<ShiftAssignment[]> {
+  const startISO = formatDateISO(startDate);
+  const endISO = formatDateISO(endDate);
+  const { data, error } = await supabase
+    .from("shift_assignments")
+    .select("*")
     .gte("assignment_date", startISO)
     .lte("assignment_date", endISO);
   if (error) throw error;
@@ -329,11 +344,9 @@ export async function fetchPublishedState(groupId: string): Promise<PublishedSta
   return data;
 }
 
-export async function publishSchedule(groupId: string, groupName: string) {
-  const biweeklyStart = getCurrentBiweeklyStart();
-  const biweeklyEnd = addDays(biweeklyStart, 13);
-  const startISO = formatDateISO(biweeklyStart);
-  const endISO = formatDateISO(biweeklyEnd);
+export async function publishSchedule(groupId: string, groupName: string, startDate: Date, endDate: Date) {
+  const startISO = formatDateISO(startDate);
+  const endISO = formatDateISO(endDate);
 
   // Mark all draft assignments in this range as published
   await supabase
@@ -353,11 +366,9 @@ export async function publishSchedule(groupId: string, groupName: string) {
   await logChange(`Published schedule for "${groupName}"`, "Publish");
 }
 
-export async function revertToLastPublished(groupId: string, groupName: string) {
-  const biweeklyStart = getCurrentBiweeklyStart();
-  const biweeklyEnd = addDays(biweeklyStart, 13);
-  const startISO = formatDateISO(biweeklyStart);
-  const endISO = formatDateISO(biweeklyEnd);
+export async function revertToLastPublished(groupId: string, groupName: string, startDate: Date, endDate: Date) {
+  const startISO = formatDateISO(startDate);
+  const endISO = formatDateISO(endDate);
 
   // Delete all unpublished (draft) assignments in this range
   await supabase
