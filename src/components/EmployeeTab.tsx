@@ -31,6 +31,7 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
   const [lastPublished, setLastPublished] = useState<string>("");
   const [showGroupFilter, setShowGroupFilter] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set());
+  const [dismissedChanges, setDismissedChanges] = useState<Set<string>>(new Set());
 
   const dates = useMemo(() => getDateRange(viewType, rangeStart), [viewType, rangeStart]);
   const rangeEnd = dates[dates.length - 1];
@@ -121,9 +122,22 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
   };
 
   const toggleHighlight = async (memberId: string, dateISO: string) => {
-    await data.toggleHighlight(memberId, dateISO);
-    const h = await data.fetchHighlights();
-    setHighlights(h);
+    const changeKey = `${memberId}:${dateISO}`;
+    // If this is an auto change highlight, dismiss it instead
+    if (dismissedChanges.has(changeKey)) {
+      // Already dismissed — toggle manual highlight
+      await data.toggleHighlight(memberId, dateISO);
+      const h = await data.fetchHighlights();
+      setHighlights(h);
+    } else if (hasShiftChanged(memberId, new Date(dateISO + "T00:00:00")) && !isHighlighted(memberId, dateISO)) {
+      // Auto change highlight is showing and no manual highlight — dismiss it
+      setDismissedChanges((prev) => new Set(prev).add(changeKey));
+    } else {
+      // Toggle manual highlight
+      await data.toggleHighlight(memberId, dateISO);
+      const h = await data.fetchHighlights();
+      setHighlights(h);
+    }
   };
 
   const saveNote = async () => {
@@ -309,7 +323,8 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
                         const dateISO = formatDateISO(date);
                         const a = getShift(member.id, dateISO);
                         const highlighted = isHighlighted(member.id, dateISO);
-                        const changed = hasShiftChanged(member.id, date);
+                        const changeKey = `${member.id}:${dateISO}`;
+                        const changed = hasShiftChanged(member.id, date) && !dismissedChanges.has(changeKey);
                         const shiftLabel = a ? formatShiftDisplay(a.shift_start, a.shift_end, a.status) : "-";
                         const cellClass = a?.status === "Off" || !a ? "off" : a?.status === "PTO" || a?.status === "LOA" || a?.status === "Vacation" ? "leave" : a?.status === "Premium Pay" ? "premium-pay" : "";
                         return (
@@ -317,7 +332,7 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
                             key={dateISO}
                             className={`${cellClass} ${highlighted ? "highlighted" : ""} ${changed ? "change-highlighted" : ""} ${isWeekend(date) ? "weekend" : ""}`}
                             onClick={() => toggleHighlight(member.id, dateISO)}
-                            title={changed ? "Changed from previous period — click to toggle highlight" : "Click to toggle highlight"}
+                            title={changed ? "Schedule changed from previous period — click to dismiss highlight" : "Click to toggle highlight"}
                           >
                             {shiftLabel}
                           </td>
@@ -331,6 +346,13 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
             </table>
           </div>
         )}
+
+        <div className="print-color-key">
+          <strong>Schedule Color Key:</strong>
+          <span><i className="key-change" />Yellow highlight = schedule changed from previous period</span>
+          <span><i className="key-leave" />Orange = PTO / LOA / Vacation</span>
+          <span><i className="key-premium" />Purple = Premium Pay</span>
+        </div>
 
         <div className="schedule-note-published">
           {note?.note_text ? (

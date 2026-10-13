@@ -2751,6 +2751,41 @@ input, select {
 .team-group-badge-sm.tc4 { background: var(--tc4); }
 .team-group-badge-sm.tc5 { background: var(--tc5); }
 
+/* Print color key */
+.print-color-key {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+  font-size: 11px;
+  color: var(--text-2);
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border-light);
+  margin-top: 12px;
+}
+
+.print-color-key strong {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.print-color-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.print-color-key i {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+}
+
+.print-color-key .key-change { background: #fef9c3; border: 2px solid #f59e0b; }
+.print-color-key .key-leave { background: var(--warning-light); }
+.print-color-key .key-premium { background: #f5f3ff; }
+
 /* Highlighted cells in employee schedule */
 .employee-table td.highlighted {
   background: #fef9c3;
@@ -3105,6 +3140,14 @@ input, select {
     border: none;
     background: none;
     padding: 8px 0;
+  }
+  .print-color-key {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .print-color-key i {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
 

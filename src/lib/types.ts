@@ -50,6 +50,7 @@ export interface ShiftAssignment {
   borrowed_from_group_id: string | null;
   premium_pay_type?: PremiumPayType | null;
   premium_pay_amount?: number | null;
+  include_as_non_prod?: boolean;
   created_at: string;
   updated_at: string;
 }

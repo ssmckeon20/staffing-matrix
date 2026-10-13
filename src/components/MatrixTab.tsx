@@ -34,11 +34,8 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
   const [selectedGroup, setSelectedGroup] = useState<string>("");
   const [matrixMode, setMatrixMode] = useState<MatrixMode>("schedule");
 
-  // Include alt-status hours (PTO, LOA, Vacation) in non-productive totals
-  const [includeAltAsNonProd, setIncludeAltAsNonProd] = useState<boolean>(() => {
-    if (typeof localStorage === "undefined") return false;
-    return localStorage.getItem("includeAltAsNonProd") === "true";
-  });
+  // Per-assignment include-as-non-prod flag in the editor
+  const [editIncludeNonProd, setEditIncludeNonProd] = useState<boolean>(false);
 
   // Collapsed hour rows
   const [collapsedHours, setCollapsedHours] = useState<Set<number>>(new Set());
@@ -66,6 +63,13 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
   const [editPremiumAmount, setEditPremiumAmount] = useState<number>(0);
   const [editMultiDays, setEditMultiDays] = useState<Set<string>>(new Set());
   const [showCopyPrompt, setShowCopyPrompt] = useState(false);
+
+  // Confirmation dialogs
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   // Conflict resolution
   const [conflict, setConflict] = useState<{
@@ -220,10 +224,10 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     return { start: null, end: null, status: "Off" };
   };
 
-  // Check if a shift counts as hours (scheduled, premium, or alt-status if included)
-  const shiftCountsAsHours = (status: ShiftStatus): boolean => {
+  // Check if a shift counts as hours (scheduled, premium, or alt-status if per-assignment flag is set)
+  const shiftCountsAsHours = (status: ShiftStatus, assignment?: ShiftAssignment): boolean => {
     if (status === "Scheduled" || status === "Premium Pay") return true;
-    if (includeAltAsNonProd && (status === "PTO" || status === "LOA" || status === "Vacation")) return true;
+    if (assignment?.include_as_non_prod && (status === "PTO" || status === "LOA" || status === "Vacation")) return true;
     return false;
   };
 
@@ -232,8 +236,9 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     let total = 0;
     for (const date of dates) {
       const dateISO = formatDateISO(date);
+      const a = getMemberAssignment(member.id, dateISO);
       const shift = getMemberShiftForDate(member.id, dateISO);
-      if (shiftCountsAsHours(shift.status) && shift.start && shift.end) {
+      if (shiftCountsAsHours(shift.status, a) && shift.start && shift.end) {
         const dur = shiftDuration(shift.start, shift.end);
         total += Math.max(0, dur - member.daily_unpaid_break);
       }
@@ -246,8 +251,9 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     let total = 0;
     for (const date of dateList) {
       const dateISO = formatDateISO(date);
+      const a = getMemberAssignment(member.id, dateISO);
       const shift = getMemberShiftForDate(member.id, dateISO);
-      if (shiftCountsAsHours(shift.status) && shift.start && shift.end) {
+      if (shiftCountsAsHours(shift.status, a) && shift.start && shift.end) {
         const dur = shiftDuration(shift.start, shift.end);
         total += Math.max(0, dur - member.daily_unpaid_break);
       }
@@ -359,7 +365,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       totalHours: weeklyAvgHours,
       totalLaborSpend: 0,
     };
-  }, [groups, members, assignments, effectiveDates, numWeeks, includeAltAsNonProd]);
+  }, [groups, members, assignments, effectiveDates, numWeeks]);
 
   // FTE calculations with productive/non-productive split (weekly averages)
   const fteCalculations = useMemo(() => {
@@ -374,8 +380,9 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
         if (!productiveOnly && member.status === "Productive") continue;
         for (const date of weekDates) {
           const dateISO = formatDateISO(date);
+          const a = getMemberAssignment(member.id, dateISO);
           const shift = getMemberShiftForDate(member.id, dateISO);
-          if (shiftCountsAsHours(shift.status) && shift.start && shift.end) {
+          if (shiftCountsAsHours(shift.status, a) && shift.start && shift.end) {
             total += shiftDuration(shift.start, shift.end);
           }
         }
@@ -389,12 +396,12 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     const avgProductive = Math.round((totalProductiveAllWeeks / numWeeks) * 10) / 10;
     const avgNonProd = Math.round((totalNonProdAllWeeks / numWeeks) * 10) / 10;
     const totalHours = Math.round((avgProductive + avgNonProd) * 10) / 10;
-    const totalFTE = Math.round((avgProductive / 40) * 100) / 100;
+    const totalFTE = Math.round((totalHours / 40) * 100) / 100;
     const budget = fteBudgets[selectedGroup]?.budgeted_fte || 0;
     const fteVariance = budget > 0 ? Math.round((totalFTE / budget) * 100) : 0;
     const fteOutOfRange = budget > 0 && (fteVariance < 95 || fteVariance > 105);
     return { week1Productive: weekProductive[0] || 0, week2Productive: weekProductive[1] || 0, week1NonProd: weekNonProd[0] || 0, week2NonProd: weekNonProd[1] || 0, totalProductive: avgProductive, totalNonProd: avgNonProd, totalHours, totalFTE, budget, fteVariance, fteOutOfRange };
-  }, [groupMembers, assignments, effectiveDates, numWeeks, selectedGroup, fteBudgets, includeAltAsNonProd]);
+  }, [groupMembers, assignments, effectiveDates, numWeeks, selectedGroup, fteBudgets]);
 
   // Staff at each hour per day
   const staffAtHour = (hour: number, date: Date): number => {
@@ -477,18 +484,22 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       const a = getMemberAssignment(member.id, dateISO);
       setEditPremiumType(a?.premium_pay_type || "");
       setEditPremiumAmount(a?.premium_pay_amount || 0);
+      setEditIncludeNonProd(false);
     } else if (shift.status !== "Scheduled" && shift.status !== "Off" && shift.status !== "Premium Pay") {
       setEditStart("");
       setEditEnd("");
       setEditStatus(shift.status);
       setEditPremiumType("");
       setEditPremiumAmount(0);
+      const a = getMemberAssignment(member.id, dateISO);
+      setEditIncludeNonProd(a?.include_as_non_prod || false);
     } else {
       setEditStart(`${String(hour).padStart(2, "0")}:00`);
       setEditEnd(slotEndForHour(hour));
       setEditStatus("Scheduled");
       setEditPremiumType("");
       setEditPremiumAmount(0);
+      setEditIncludeNonProd(false);
     }
     setEditorOpen(true);
   };
@@ -501,8 +512,15 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     const shiftEnd = (status === "Scheduled" || isPremium) ? editEnd : null;
     const premiumType = isPremium && editPremiumType ? editPremiumType : null;
     const premiumAmt = isPremium && editPremiumType ? editPremiumAmount : null;
+    const includeNonProd = (status === "PTO" || status === "LOA" || status === "Vacation") && editIncludeNonProd;
 
     const datesToSave = [editingDate, ...Array.from(editMultiDays).filter((d) => d !== editingDate)];
+
+    // Capture prior state for undo
+    const priorAssignments: { dateISO: string; data: ShiftAssignment | null }[] = [];
+    for (const dateISO of datesToSave) {
+      priorAssignments.push({ dateISO, data: getMemberAssignment(editingMember.id, dateISO) || null });
+    }
 
     const doSave = async () => {
       for (const dateISO of datesToSave) {
@@ -517,12 +535,38 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           borrowed_from_group_id: editingMember.group_id !== selectedGroup ? editingMember.group_id : null,
           premium_pay_type: premiumType as any,
           premium_pay_amount: premiumAmt as any,
+          include_as_non_prod: includeNonProd,
         });
       }
       await data.logChange(`Updated ${editingMember.name}'s shift on ${editingDate} in ${currentGroup?.name}${datesToSave.length > 1 ? ` (${datesToSave.length} days)` : ""}`, "Matrix");
       const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
       setAssignments(a);
       setHasDraftChanges(true);
+      // Push undo entry
+      setUndoStack((prev) => [...prev, {
+        description: `Edit ${editingMember.name} on ${datesToSave.length > 1 ? `${datesToSave.length} days` : editingDate}`,
+        action: async () => {
+          for (const prior of priorAssignments) {
+            if (prior.data) {
+              await data.upsertShiftAssignment({
+                member_id: prior.data.member_id,
+                group_id: prior.data.group_id,
+                assignment_date: prior.dateISO,
+                shift_start: prior.data.shift_start,
+                shift_end: prior.data.shift_end,
+                status: prior.data.status,
+                is_published: prior.data.is_published,
+                borrowed_from_group_id: prior.data.borrowed_from_group_id,
+                premium_pay_type: prior.data.premium_pay_type as any,
+                premium_pay_amount: prior.data.premium_pay_amount as any,
+                include_as_non_prod: prior.data.include_as_non_prod || false,
+              });
+            } else {
+              await data.deleteShiftAssignment(editingMember.id, prior.dateISO);
+            }
+          }
+        },
+      }]);
       setEditorOpen(false);
       toast(`Shift updated for ${editingMember.name}${datesToSave.length > 1 ? ` (${datesToSave.length} days)` : ""}`);
     };
@@ -557,11 +601,32 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
 
   const removeShift = async () => {
     if (!editingMember) return;
+    const prior = getMemberAssignment(editingMember.id, editingDate);
     await data.deleteShiftAssignment(editingMember.id, editingDate);
     await data.logChange(`Removed ${editingMember.name}'s shift on ${editingDate}`, "Matrix");
     const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
     setAssignments(a);
     setHasDraftChanges(true);
+    if (prior) {
+      setUndoStack((prev) => [...prev, {
+        description: `Remove ${editingMember.name} on ${editingDate}`,
+        action: async () => {
+          await data.upsertShiftAssignment({
+            member_id: prior.member_id,
+            group_id: prior.group_id,
+            assignment_date: prior.assignment_date,
+            shift_start: prior.shift_start,
+            shift_end: prior.shift_end,
+            status: prior.status,
+            is_published: prior.is_published,
+            borrowed_from_group_id: prior.borrowed_from_group_id,
+            premium_pay_type: prior.premium_pay_type as any,
+            premium_pay_amount: prior.premium_pay_amount as any,
+            include_as_non_prod: prior.include_as_non_prod || false,
+          });
+        },
+      }]);
+    }
     setEditorOpen(false);
     toast(`Shift removed for ${editingMember.name}`);
   };
@@ -639,6 +704,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
     setAssignments(a);
     setHasDraftChanges(false);
+    setUndoStack([]);
     // Reload published states
     const ps = await data.fetchPublishedState(selectedGroup);
     if (ps) setPublishedStates({ ...publishedStates, [selectedGroup]: ps });
@@ -657,13 +723,21 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
 
   const handleRevert = async () => {
     if (!currentGroup) return;
-    await data.revertToLastPublished(selectedGroup, currentGroup.name, dates[0], rangeEnd);
-    if (typeof localStorage !== "undefined") localStorage.removeItem(`slotAdj_${selectedGroup}`);
-    setSlotAdjustments({});
-    const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
-    setAssignments(a);
-    setHasDraftChanges(false);
-    toast("Reverted to last published schedule");
+    setConfirmDialog({
+      title: "Revert to Published",
+      message: "This will undo all changes made since the last publication. Any draft shifts you've added or edited will be permanently removed. Are you sure you want to continue?",
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        await data.revertToLastPublished(selectedGroup, currentGroup.name, dates[0], rangeEnd);
+        if (typeof localStorage !== "undefined") localStorage.removeItem(`slotAdj_${selectedGroup}`);
+        setSlotAdjustments({});
+        setUndoStack([]);
+        const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
+        setAssignments(a);
+        setHasDraftChanges(false);
+        toast("Reverted to last published schedule");
+      },
+    });
   };
 
   const saveVolumePlan = async () => {
@@ -708,18 +782,19 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       const newDate = dates.find((d) => d.getDay() === dayOfWeek);
       if (!newDate) continue;
       const newDateISO = formatDateISO(newDate);
-      await data.upsertShiftAssignment({
-        member_id: a.member_id,
-        group_id: selectedGroup,
-        assignment_date: newDateISO,
-        shift_start: a.shift_start,
-        shift_end: a.shift_end,
-        status: a.status,
-        is_published: false,
-        borrowed_from_group_id: a.borrowed_from_group_id,
-        premium_pay_type: a.premium_pay_type as any,
-        premium_pay_amount: a.premium_pay_amount as any,
-      });
+        await data.upsertShiftAssignment({
+          member_id: a.member_id,
+          group_id: selectedGroup,
+          assignment_date: newDateISO,
+          shift_start: a.shift_start,
+          shift_end: a.shift_end,
+          status: a.status,
+          is_published: false,
+          borrowed_from_group_id: a.borrowed_from_group_id,
+          premium_pay_type: a.premium_pay_type as any,
+          premium_pay_amount: a.premium_pay_amount as any,
+          include_as_non_prod: a.include_as_non_prod || false,
+        });
     }
     await data.logChange(`Copied schedule from previous period for ${currentGroup?.name}`, "Matrix");
     const refreshed = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
@@ -737,11 +812,6 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     const periodLen = newType === "bi-weekly" ? 14 : newType === "monthly" ? 30 : newType === "daily" ? 1 : 7;
     const periodsElapsed = Math.floor(diffDays / periodLen);
     setRangeStart(addDays(ppStart, periodsElapsed * periodLen));
-  };
-
-  const toggleIncludeAltAsNonProd = (val: boolean) => {
-    setIncludeAltAsNonProd(val);
-    if (typeof localStorage !== "undefined") localStorage.setItem("includeAltAsNonProd", String(val));
   };
 
   const publishedInfo = publishedStates[selectedGroup];
@@ -813,10 +883,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           <label>Pay Period Start:</label>
           <input type="date" value={payPeriodStart} onChange={(e) => { setPayPeriodStart(e.target.value); if (typeof localStorage !== "undefined") localStorage.setItem("payPeriodStart", e.target.value); }} />
         </div>
-        <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-          <input type="checkbox" checked={includeAltAsNonProd} onChange={(e) => toggleIncludeAltAsNonProd(e.target.checked)} />
-          <span>Include PTO/LOA/Vacation as non-productive hours</span>
-        </label>
+
         {matrixMode === "schedule" && (
           <button className="copy-schedule-btn" onClick={() => setShowCopyPrompt(true)}>
             <Icon name="refresh" size={13} /> Copy From Previous Period
@@ -1014,29 +1081,61 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                                     <strong>{member.name}</strong>
                                     <span className={`employee-hours ${isOT ? "ot-warning" : ""}`}>{hoursLabel(schedHrs)} scheduled{isOT ? ` · ${otHrs}h OT` : ""}</span>
                                   </div>
-                                  <button className="row-delete-btn" onClick={async () => {
+                                  <button className="row-delete-btn" onClick={() => {
                                     const dateISOs = dates.map((d) => formatDateISO(d));
-                                    let hadShift = false;
+                                    const deletedShifts: { dateISO: string; data: ShiftAssignment }[] = [];
                                     for (const dateISO of dateISOs) {
                                       const shift = getMemberShiftForDate(member.id, dateISO);
                                       if ((shift.status === "Scheduled" || shift.status === "Premium Pay") && shift.start && parseInt(shift.start.split(":")[0]) === hour) {
-                                        await data.deleteShiftAssignment(member.id, dateISO);
-                                        hadShift = true;
+                                        const a = getMemberAssignment(member.id, dateISO);
+                                        if (a) deletedShifts.push({ dateISO, data: a });
                                       }
                                     }
-                                    setPendingRowMembers((prev) => {
-                                      const next = new Map(prev);
-                                      const list = next.get(hour);
-                                      if (list) next.set(hour, list.filter((m) => m.id !== member.id));
-                                      return next;
+                                    setConfirmDialog({
+                                      title: "Remove Employee From This Shift",
+                                      message: `Are you sure? This will remove all scheduled shifts at ${formatHour24(hour)} for ${member.name} across the displayed period (${deletedShifts.length} shift${deletedShifts.length !== 1 ? "s" : ""}).`,
+                                      onConfirm: async () => {
+                                        setConfirmDialog(null);
+                                        let hadShift = false;
+                                        for (const { dateISO } of deletedShifts) {
+                                          await data.deleteShiftAssignment(member.id, dateISO);
+                                          hadShift = true;
+                                        }
+                                        setPendingRowMembers((prev) => {
+                                          const next = new Map(prev);
+                                          const list = next.get(hour);
+                                          if (list) next.set(hour, list.filter((m) => m.id !== member.id));
+                                          return next;
+                                        });
+                                        if (hadShift) {
+                                          await data.logChange(`Removed ${member.name} from ${formatHour24(hour)} line in ${currentGroup?.name}`, "Matrix");
+                                          const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
+                                          setAssignments(a);
+                                          setHasDraftChanges(true);
+                                          setUndoStack((prev) => [...prev, {
+                                            description: `Remove ${member.name} from ${formatHour24(hour)}`,
+                                            action: async () => {
+                                              for (const { data: d } of deletedShifts) {
+                                                await data.upsertShiftAssignment({
+                                                  member_id: d.member_id,
+                                                  group_id: d.group_id,
+                                                  assignment_date: d.assignment_date,
+                                                  shift_start: d.shift_start,
+                                                  shift_end: d.shift_end,
+                                                  status: d.status,
+                                                  is_published: d.is_published,
+                                                  borrowed_from_group_id: d.borrowed_from_group_id,
+                                                  premium_pay_type: d.premium_pay_type as any,
+                                                  premium_pay_amount: d.premium_pay_amount as any,
+                                                  include_as_non_prod: d.include_as_non_prod || false,
+                                                });
+                                              }
+                                            },
+                                          }]);
+                                        }
+                                        toast(`${member.name} removed from ${formatHour24(hour)}`);
+                                      },
                                     });
-                                    if (hadShift) {
-                                      await data.logChange(`Removed ${member.name} from ${formatHour24(hour)} line in ${currentGroup?.name}`, "Matrix");
-                                      const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
-                                      setAssignments(a);
-                                      setHasDraftChanges(true);
-                                    }
-                                    toast(`${member.name} removed from ${formatHour24(hour)}`);
                                   }} aria-label={`Remove ${member.name} from this hour`} title="Remove from this hour">&#x2715;</button>
                                 </td>
                                 {dates.map((date) => {
@@ -1239,7 +1338,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
             <div className="editor-date-display">{editingDate}</div>
           </label>
           <label>Status
-            <select value={editStatus} onChange={(e) => setEditStatus(e.target.value as ShiftStatus)}>
+            <select value={editStatus} onChange={(e) => { setEditStatus(e.target.value as ShiftStatus); setEditIncludeNonProd(false); }}>
               <option value="Scheduled">Scheduled</option>
               <option value="Premium Pay">Premium Pay</option>
               <option value="Off">Off</option>
@@ -1248,6 +1347,12 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
               <option value="Vacation">Vacation</option>
             </select>
           </label>
+          {(editStatus === "PTO" || editStatus === "LOA" || editStatus === "Vacation") && (
+            <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <input type="checkbox" checked={editIncludeNonProd} onChange={(e) => setEditIncludeNonProd(e.target.checked)} />
+              <span>Include these hours in non-productive totals</span>
+            </label>
+          )}
           {(editStatus === "Scheduled" || editStatus === "Premium Pay") && (
             <label>Shift Time
               <div className="shift-time-inputs">
@@ -1403,6 +1508,28 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           }
         >
           <p className="modal-hint">This will create new shifts in the current period based on the previous period's assignments. Existing shifts will be overwritten for matching days. This only affects {currentGroup?.name}.</p>
+        </Modal>
+      )}
+
+      {/* Confirmation Dialog */}
+      {confirmDialog && (
+        <Modal
+          title={confirmDialog.title}
+          onClose={() => setConfirmDialog(null)}
+          footer={
+            <>
+              <div />
+              <div className="modal-actions-right">
+                <Button onClick={() => setConfirmDialog(null)}>Cancel</Button>
+                <Button variant="primary" onClick={confirmDialog.onConfirm}>Confirm</Button>
+              </div>
+            </>
+          }
+        >
+          <div className="conflict-message">
+            <Icon name="alert" size={24} />
+            <p>{confirmDialog.message}</p>
+          </div>
         </Modal>
       )}
 
