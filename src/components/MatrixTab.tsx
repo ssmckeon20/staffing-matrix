@@ -227,6 +227,34 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
     return Math.round(total * 10) / 10;
   };
 
+  // Calculate scheduled hours for a member across a specific set of dates
+  const memberHoursForDates = (member: TeamMember, dateList: Date[]): number => {
+    let total = 0;
+    for (const date of dateList) {
+      const dateISO = formatDateISO(date);
+      const shift = getMemberShiftForDate(member.id, dateISO);
+      if ((shift.status === "Scheduled" || shift.status === "Premium Pay") && shift.start && shift.end) {
+        const dur = shiftDuration(shift.start, shift.end);
+        total += Math.max(0, dur - member.daily_unpaid_break);
+      }
+    }
+    return Math.round(total * 10) / 10;
+  };
+
+  // For daily view, expand to the full week aligned to pay period
+  const effectiveDates = useMemo((): Date[] => {
+    if (viewType === "daily" && dates.length === 1) {
+      const ppStart = new Date(payPeriodStart + "T00:00:00");
+      const daysFromPayStart = Math.floor((dates[0].getTime() - ppStart.getTime()) / (1000 * 60 * 60 * 24));
+      const weekStartOffset = Math.floor(daysFromPayStart / 7) * 7;
+      const weekStart = addDays(ppStart, weekStartOffset);
+      return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+    }
+    return dates;
+  }, [dates, viewType, payPeriodStart]);
+
+  const numWeeks = Math.max(1, Math.ceil(effectiveDates.length / 7));
+
   // Calculate weekly hours for OT detection
   const memberWeeklyHours = (member: TeamMember, weekIndex: number): number => {
     const weekDates = dates.slice(weekIndex * 7, (weekIndex + 1) * 7);
@@ -300,41 +328,31 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
     let totalProductive = 0;
     let totalNonProductive = 0;
     let totalHours = 0;
-    let totalLaborSpend = 0;
     for (const g of groups) {
       const gMembers = members.filter((m) => m.group_id === g.id);
       for (const m of gMembers) {
         if (m.status === "Productive") totalProductive++;
         else totalNonProductive++;
-        const schedHrs = memberScheduledHours(m);
-        totalHours += schedHrs;
+        totalHours += memberHoursForDates(m, effectiveDates);
       }
     }
+    const weeklyAvgHours = Math.round((totalHours / numWeeks) * 10) / 10;
+    const weeklyAvgFTE = Math.round((weeklyAvgHours / 40) * 100) / 100;
     return {
       totalProductive,
       totalNonProductive,
-      totalFTE: Math.round((totalHours / 40) * 100) / 100,
-      totalHours,
-      totalLaborSpend,
+      totalFTE: weeklyAvgFTE,
+      totalHours: weeklyAvgHours,
+      totalLaborSpend: 0,
     };
-  }, [groups, members, assignments, dates]);
+  }, [groups, members, assignments, effectiveDates, numWeeks]);
 
-  // Compute week boundaries based on user's payroll period start
-  const weekBoundaries = useMemo(() => {
-    const ppStart = new Date(payPeriodStart + "T00:00:00");
-    const periodStart = dates[0];
-    const daysFromPayStart = Math.floor((periodStart.getTime() - ppStart.getTime()) / (1000 * 60 * 60 * 24));
-    const week1Start = dates[0];
-    const week1End = dates[Math.min(6, dates.length - 1)];
-    const week2Start = dates[Math.min(7, dates.length - 1)];
-    const week2End = dates[Math.min(13, dates.length - 1)];
-    return { week1Start, week1End, week2Start, week2End, week1Dates: dates.slice(0, 7), week2Dates: dates.slice(7, 14) };
-  }, [dates, payPeriodStart]);
-
-  // FTE calculations with productive/non-productive split
+  // FTE calculations with productive/non-productive split (weekly averages)
   const fteCalculations = useMemo(() => {
-    const week1Dates = weekBoundaries.week1Dates;
-    const week2Dates = weekBoundaries.week2Dates;
+    const weeks: Date[][] = [];
+    for (let w = 0; w < numWeeks; w++) {
+      weeks.push(effectiveDates.slice(w * 7, Math.min((w + 1) * 7, effectiveDates.length)));
+    }
     const calcWeekHours = (weekDates: Date[], productiveOnly: boolean) => {
       let total = 0;
       for (const member of groupMembers) {
@@ -350,19 +368,19 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
       }
       return Math.round(total * 10) / 10;
     };
-    const week1Productive = calcWeekHours(week1Dates, true);
-    const week2Productive = calcWeekHours(week2Dates, true);
-    const week1NonProd = calcWeekHours(week1Dates, false);
-    const week2NonProd = calcWeekHours(week2Dates, false);
-    const totalProductive = week1Productive + week2Productive;
-    const totalNonProd = week1NonProd + week2NonProd;
-    const totalHours = totalProductive + totalNonProd;
-    const totalFTE = Math.round((totalProductive / 40) * 100) / 100;
+    const weekProductive = weeks.map((w) => calcWeekHours(w, true));
+    const weekNonProd = weeks.map((w) => calcWeekHours(w, false));
+    const totalProductiveAllWeeks = weekProductive.reduce((a, b) => a + b, 0);
+    const totalNonProdAllWeeks = weekNonProd.reduce((a, b) => a + b, 0);
+    const avgProductive = Math.round((totalProductiveAllWeeks / numWeeks) * 10) / 10;
+    const avgNonProd = Math.round((totalNonProdAllWeeks / numWeeks) * 10) / 10;
+    const totalHours = Math.round((avgProductive + avgNonProd) * 10) / 10;
+    const totalFTE = Math.round((avgProductive / 40) * 100) / 100;
     const budget = fteBudgets[selectedGroup]?.budgeted_fte || 0;
     const fteVariance = budget > 0 ? Math.round((totalFTE / budget) * 100) : 0;
     const fteOutOfRange = budget > 0 && (fteVariance < 95 || fteVariance > 105);
-    return { week1Productive, week2Productive, week1NonProd, week2NonProd, totalProductive, totalNonProd, totalHours, totalFTE, budget, fteVariance, fteOutOfRange };
-  }, [groupMembers, assignments, dates, selectedGroup, fteBudgets]);
+    return { week1Productive: weekProductive[0] || 0, week2Productive: weekProductive[1] || 0, week1NonProd: weekNonProd[0] || 0, week2NonProd: weekNonProd[1] || 0, totalProductive: avgProductive, totalNonProd: avgNonProd, totalHours, totalFTE, budget, fteVariance, fteOutOfRange };
+  }, [groupMembers, assignments, effectiveDates, numWeeks, selectedGroup, fteBudgets]);
 
   // Staff at each hour per day
   const staffAtHour = (hour: number, date: Date): number => {
@@ -732,7 +750,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
           {/* Productivity indicators next to heading */}
           <div className="heading-metrics">
             <article className="heading-metric" onClick={() => { setEditingAllGroupsBudget(true); setAllGroupsBudgetInput(String(allGroupsBudget || "")); }} style={{ cursor: "pointer" }}>
-              <span className="heading-metric-label">All Groups FTE</span>
+              <span className="heading-metric-label">All Groups FTE <small style={{ fontWeight: 400, fontSize: "10px" }}>Weekly Avg</small></span>
               <div className="heading-metric-value">{allGroupsFte.totalFTE}</div>
               {allGroupsBudget > 0 ? (
                 <small className={allGroupsFteOutOfRange ? "fte-out-of-range" : "fte-in-range"}>vs {allGroupsBudget} budgeted ({allGroupsFteVariance}%)</small>
@@ -741,7 +759,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
               )}
             </article>
             <article className="heading-metric">
-              <span className="heading-metric-label">Total Hours</span>
+              <span className="heading-metric-label">Weekly Avg Hours</span>
               <div className="heading-metric-value">{allGroupsFte.totalHours}</div>
               <small>{allGroupsFte.totalProductive} Productive · {allGroupsFte.totalNonProductive} Non-Productive</small>
             </article>
@@ -802,7 +820,7 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
           {/* Per-group Metrics */}
           <section className="metrics">
             <article className="metric" onClick={() => { setEditingFte(true); setFteInput(String(fteCalculations.budget || "")); }} style={{ cursor: "pointer" }}>
-              <div className="metric-top"><span>FTE (Scheduled)</span><Icon name="team" size={16} /></div>
+              <div className="metric-top"><span>FTE (Weekly Avg)</span><Icon name="team" size={16} /></div>
               <div className="metric-value">{fteCalculations.totalFTE}</div>
               <small>
                 {fteCalculations.budget > 0 ? (
@@ -815,9 +833,9 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
               </small>
             </article>
             <article className="metric">
-              <div className="metric-top"><span>Scheduled Hours</span></div>
+              <div className="metric-top"><span>Weekly Avg Hours</span></div>
               <div className="metric-value">{fteCalculations.totalHours}</div>
-              <small>Wk1: {fteCalculations.week1Productive} Prod / {fteCalculations.week1NonProd} Non-Prod · Wk2: {fteCalculations.week2Productive} Prod / {fteCalculations.week2NonProd} Non-Prod</small>
+              <small>Weekly Avg: {fteCalculations.totalProductive} Prod / {fteCalculations.totalNonProd} Non-Prod</small>
             </article>
             <article className="metric">
               <div className="metric-top"><span>Labor Spend</span></div>
