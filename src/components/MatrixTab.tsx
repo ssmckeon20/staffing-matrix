@@ -140,6 +140,22 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  // Snap rangeStart to the start of the current pay period whenever payPeriodStart changes
+  useEffect(() => {
+    const ppStart = new Date(payPeriodStart + "T00:00:00");
+    const now = new Date();
+    const diffDays = Math.floor((now.getTime() - ppStart.getTime()) / (1000 * 60 * 60 * 24));
+    const periodsElapsed = Math.floor(diffDays / 14);
+    const currentPeriodStart = addDays(ppStart, periodsElapsed * 14);
+    setRangeStart(currentPeriodStart);
+  }, [payPeriodStart]);
+
+  // Navigate by full pay periods (14 days for bi-weekly, 7 for weekly/daily, 30 for monthly)
+  const navigatePeriod = (direction: number) => {
+    const step = viewType === "bi-weekly" ? 14 : viewType === "monthly" ? 30 : viewType === "daily" ? 1 : 7;
+    setRangeStart(addDays(rangeStart, step * direction));
+  };
+
   // Reload assignments when group or date range changes
   useEffect(() => {
     if (!selectedGroup) return;
@@ -732,13 +748,13 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
           </div>
         </div>
         <div className="heading-actions">
-          <Button variant="icon" icon="chevronLeft" onClick={() => setRangeStart(addDays(rangeStart, viewType === "daily" ? -1 : -7))} />
+          <Button variant="icon" icon="chevronLeft" onClick={() => navigatePeriod(-1)} />
           <button className="date-control">
             <Icon name="calendar" />
             <span>{formatDateRange(dates[0], rangeEnd)}</span>
             <Icon name="chevronDown" size={16} />
           </button>
-          <Button variant="icon" icon="chevronRight" onClick={() => setRangeStart(addDays(rangeStart, viewType === "daily" ? 1 : 7))} />
+          <Button variant="icon" icon="chevronRight" onClick={() => navigatePeriod(1)} />
         </div>
       </section>
 
@@ -861,10 +877,14 @@ export default function MatrixTab({ toast }: { toast: ToastFn }) {
                 <table className="schedule-matrix">
                   <thead>
                     <tr className="week-band">
-                      <th colSpan={2}>Shift and staff</th>
-                      {Array.from({ length: Math.ceil(dates.length / 7) }, (_, wi) => (
-                        <th key={wi} colSpan={Math.min(7, dates.length - wi * 7)}>Week {wi + 1}</th>
-                      ))}
+                      <th colSpan={2}>Shift And Staff</th>
+                      {Array.from({ length: Math.ceil(dates.length / 7) }, (_, wi) => {
+                        const wkStart = dates[wi * 7];
+                        const wkEnd = dates[Math.min((wi + 1) * 7 - 1, dates.length - 1)];
+                        return (
+                          <th key={wi} colSpan={Math.min(7, dates.length - wi * 7)}>Week {wi + 1} ({formatDate(wkStart)} – {formatDate(wkEnd)})</th>
+                        );
+                      })}
                     </tr>
                     <tr>
                       <th>Status</th>
