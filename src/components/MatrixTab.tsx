@@ -25,6 +25,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
   const [groups, setGroups] = useState<AssignmentGroup[]>([]);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [assignments, setAssignments] = useState<ShiftAssignment[]>([]);
+  const [allAssignments, setAllAssignments] = useState<ShiftAssignment[]>([]);
   const [volumePlans, setVolumePlans] = useState<Record<string, VolumePlan>>({});
   const [fteBudgets, setFteBudgets] = useState<Record<string, FteBudget>>({});
   const [publishedStates, setPublishedStates] = useState<Record<string, PublishedState>>({});
@@ -144,6 +145,8 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
         const a = await data.fetchShiftAssignments(gid, dates[0], rangeEnd);
         setAssignments(a);
       }
+      const allA = await data.fetchAllAssignmentsInRange(dates[0], rangeEnd);
+      setAllAssignments(allA);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -179,12 +182,21 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     }
     (async () => {
       try {
-        const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
-        setAssignments(a);
+        const a = await refreshAssignments();
         setHasDraftChanges(a.some((x) => !x.is_published));
       } catch (e) { setError(String(e)); }
     })();
-  }, [selectedGroup, rangeStart, viewType]);
+  }, [selectedGroup, rangeStart, viewType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reload all-groups assignments when date range changes (independent of selected group)
+  useEffect(() => {
+    (async () => {
+      try {
+        const allA = await data.fetchAllAssignmentsInRange(dates[0], rangeEnd);
+        setAllAssignments(allA);
+      } catch (e) { setError(String(e)); }
+    })();
+  }, [rangeStart, viewType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load volume plan into editing state when group changes
   useEffect(() => {
@@ -215,6 +227,16 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     const end = vpEnabled ? vpEnd : (currentGroup?.hours_of_service_end || "22:00");
     return generateHourLabels(start, end);
   }, [vpEnabled, vpStart, vpEnd, currentGroup]);
+
+  const refreshAssignments = async () => {
+    const [groupA, allA] = await Promise.all([
+      data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd),
+      data.fetchAllAssignmentsInRange(dates[0], rangeEnd),
+    ]);
+    setAssignments(groupA);
+    setAllAssignments(allA);
+    return groupA;
+  };
 
   const getMemberAssignment = (memberId: string, dateISO: string): ShiftAssignment | undefined => {
     return assignments.find((a) => a.member_id === memberId && a.assignment_date === dateISO);
@@ -349,29 +371,37 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     return Math.round(total * 100) / 100;
   }, [groupMembers, assignments, dates]);
 
-  // Cross-group totals — FTE = avg weekly hours across all groups / 40
+  // Cross-group totals — total hours across ALL teams, divided by weeks in the period
   const allGroupsFte = useMemo(() => {
-    let totalProductive = 0;
-    let totalNonProductive = 0;
-    let totalHours = 0;
-    for (const g of groups) {
-      const gMembers = members.filter((m) => m.group_id === g.id);
-      for (const m of gMembers) {
-        if (m.status === "Productive") totalProductive++;
-        else totalNonProductive++;
-        totalHours += memberHoursForDates(m, effectiveDates);
+    let totalProductiveHours = 0;
+    let totalNonProdHours = 0;
+    for (const date of effectiveDates) {
+      const dateISO = formatDateISO(date);
+      for (const m of members) {
+        const a = allAssignments.find((x) => x.member_id === m.id && x.assignment_date === dateISO);
+        if (!a) continue;
+        const status = a.status;
+        if (!shiftCountsAsHours(status, a)) continue;
+        if (!a.shift_start || !a.shift_end) continue;
+        const dur = shiftDuration(a.shift_start, a.shift_end);
+        const breakMins = a.shift_override_break != null ? a.shift_override_break : m.daily_unpaid_break;
+        const paidHrs = Math.max(0, dur - breakMins);
+        if (m.status === "Productive") totalProductiveHours += paidHrs;
+        else totalNonProdHours += paidHrs;
       }
     }
-    const weeklyAvgHours = Math.round((totalHours / numWeeks) * 10) / 10;
-    const weeklyAvgFTE = Math.round((weeklyAvgHours / 40) * 100) / 100;
+    const weeklyProductive = Math.round((totalProductiveHours / numWeeks) * 10) / 10;
+    const weeklyNonProd = Math.round((totalNonProdHours / numWeeks) * 10) / 10;
+    const weeklyHours = Math.round((weeklyProductive + weeklyNonProd) * 10) / 10;
+    const weeklyFTE = Math.round((weeklyHours / 40) * 100) / 100;
     return {
-      totalProductive,
-      totalNonProductive,
-      totalFTE: weeklyAvgFTE,
-      totalHours: weeklyAvgHours,
+      totalProductive: weeklyProductive,
+      totalNonProductive: weeklyNonProd,
+      totalFTE: weeklyFTE,
+      totalHours: weeklyHours,
       totalLaborSpend: 0,
     };
-  }, [groups, members, assignments, effectiveDates, numWeeks]);
+  }, [members, allAssignments, effectiveDates, numWeeks]);
 
   // FTE calculations with productive/non-productive split (weekly averages)
   const fteCalculations = useMemo(() => {
@@ -389,7 +419,9 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           const a = getMemberAssignment(member.id, dateISO);
           const shift = getMemberShiftForDate(member.id, dateISO);
           if (shiftCountsAsHours(shift.status, a) && shift.start && shift.end) {
-            total += shiftDuration(shift.start, shift.end);
+            const dur = shiftDuration(shift.start, shift.end);
+            const breakMins = a?.shift_override_break != null ? a.shift_override_break : member.daily_unpaid_break;
+            total += Math.max(0, dur - breakMins);
           }
         }
       }
@@ -405,8 +437,11 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     const totalFTE = Math.round((totalHours / 40) * 100) / 100;
     const budget = fteBudgets[selectedGroup]?.budgeted_fte || 0;
     const fteVariance = budget > 0 ? Math.round((totalFTE / budget) * 100) : 0;
+    const fteClass = budget > 0
+      ? (fteVariance < 95 || fteVariance > 105 ? "fte-out-of-range" : fteVariance > 100 ? "fte-warning" : "fte-in-range")
+      : "";
     const fteOutOfRange = budget > 0 && (fteVariance < 95 || fteVariance > 105);
-    return { week1Productive: weekProductive[0] || 0, week2Productive: weekProductive[1] || 0, week1NonProd: weekNonProd[0] || 0, week2NonProd: weekNonProd[1] || 0, totalProductive: avgProductive, totalNonProd: avgNonProd, totalHours, totalFTE, budget, fteVariance, fteOutOfRange };
+    return { week1Productive: weekProductive[0] || 0, week2Productive: weekProductive[1] || 0, week1NonProd: weekNonProd[0] || 0, week2NonProd: weekNonProd[1] || 0, totalProductive: avgProductive, totalNonProd: avgNonProd, totalHours, totalFTE, budget, fteVariance, fteOutOfRange, fteClass };
   }, [groupMembers, assignments, effectiveDates, numWeeks, selectedGroup, fteBudgets]);
 
   // Staff at each hour per day
@@ -464,7 +499,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
 
   // Four slots per hour by default, plus user adjustments
   const slotsForHour = (hour: number): number => {
-    return Math.max(0, 4 + (slotAdjustments[hour] || 0));
+    return Math.max(0, (slotAdjustments[hour] || 0));
   };
 
   const updateSlotAdjustment = (hour: number, delta: number) => {
@@ -615,8 +650,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     const prior = getMemberAssignment(editingMember.id, editingDate);
     await data.deleteShiftAssignment(editingMember.id, editingDate);
     await data.logChange(`Removed ${editingMember.name}'s shift on ${editingDate}`, "Matrix");
-    const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
-    setAssignments(a);
+    const a = await refreshAssignments();
     setHasDraftChanges(true);
     if (prior) {
       setUndoStack((prev) => [...prev, {
@@ -713,8 +747,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     await data.publishSchedule(selectedGroup, currentGroup.name, dates[0], rangeEnd);
     if (typeof localStorage !== "undefined") localStorage.removeItem(`slotAdj_${selectedGroup}`);
     setSlotAdjustments({});
-    const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
-    setAssignments(a);
+    const a = await refreshAssignments();
     setHasDraftChanges(false);
     setUndoStack([]);
     // Reload published states
@@ -728,8 +761,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     const last = undoStack[undoStack.length - 1];
     await last.action();
     setUndoStack(undoStack.slice(0, -1));
-    const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
-    setAssignments(a);
+    const a = await refreshAssignments();
     toast(`Undid: ${last.description}`);
   };
 
@@ -744,8 +776,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
         if (typeof localStorage !== "undefined") localStorage.removeItem(`slotAdj_${selectedGroup}`);
         setSlotAdjustments({});
         setUndoStack([]);
-        const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
-        setAssignments(a);
+        const a = await refreshAssignments();
         setHasDraftChanges(false);
         toast("Reverted to last published schedule");
       },
@@ -778,8 +809,8 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
 
   const handleCopyFromPrevious = async () => {
     if (!selectedGroup) return;
-    const prevEnd = addDays(dates[0], -1);
     const periodLen = dates.length;
+    const prevEnd = addDays(dates[0], -1);
     const prevStart = addDays(prevEnd, -(periodLen - 1));
     const prevAssignments = await data.fetchShiftAssignments(selectedGroup, prevStart, prevEnd);
     if (prevAssignments.length === 0) {
@@ -787,12 +818,14 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       setShowCopyPrompt(false);
       return;
     }
+    const prevDates = Array.from({ length: periodLen }, (_, i) => addDays(prevStart, i));
+    let copied = 0;
     for (const a of prevAssignments) {
       if (a.status !== "Scheduled" && a.status !== "Premium Pay") continue;
       const prevDate = new Date(a.assignment_date + "T00:00:00");
-      const dayOfWeek = prevDate.getDay();
-      const newDate = dates.find((d) => d.getDay() === dayOfWeek);
-      if (!newDate) continue;
+      const dayOffset = Math.round((prevDate.getTime() - prevStart.getTime()) / (1000 * 60 * 60 * 24));
+      if (dayOffset < 0 || dayOffset >= periodLen) continue;
+      const newDate = dates[dayOffset];
       const newDateISO = formatDateISO(newDate);
         await data.upsertShiftAssignment({
           member_id: a.member_id,
@@ -808,13 +841,26 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           include_as_non_prod: a.include_as_non_prod || false,
           shift_override_break: a.shift_override_break ?? null,
         });
+      copied++;
     }
     await data.logChange(`Copied schedule from previous period for ${currentGroup?.name}`, "Matrix");
-    const refreshed = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
-    setAssignments(refreshed);
+    const refreshed = await refreshAssignments();
     setHasDraftChanges(true);
     setShowCopyPrompt(false);
-    toast(`Copied ${prevAssignments.length} shifts from previous period`);
+    toast(`Copied ${copied} shifts from previous period`);
+  };
+
+  const handleClearAllAssignments = async () => {
+    if (!selectedGroup) return;
+    const startISO = formatDateISO(dates[0]);
+    const endISO = formatDateISO(rangeEnd);
+    await data.deleteAllAssignmentsInRange(selectedGroup, startISO, endISO);
+    await data.logChange(`Cleared all assignments for ${currentGroup?.name} for ${startISO} to ${endISO}`, "Matrix");
+    const a = await refreshAssignments();
+    setHasDraftChanges(a.length > 0);
+    setUndoStack([]);
+    setConfirmDialog(null);
+    toast(`Cleared all assignments for ${currentGroup?.name}`);
   };
 
   const shiftViewType = (newType: ViewType) => {
@@ -833,7 +879,9 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     : "Not Yet Published";
 
   const allGroupsFteVariance = allGroupsBudget > 0 ? Math.round((allGroupsFte.totalFTE / allGroupsBudget) * 100) : 0;
-  const allGroupsFteOutOfRange = allGroupsBudget > 0 && (allGroupsFteVariance < 95 || allGroupsFteVariance > 105);
+  const allGroupsFteClass = allGroupsBudget > 0
+    ? (allGroupsFteVariance < 95 || allGroupsFteVariance > 105 ? "fte-out-of-range" : allGroupsFteVariance > 100 ? "fte-warning" : "fte-in-range")
+    : "";
 
   const availableToAssign = borrowMode
     ? members
@@ -857,10 +905,10 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           {/* Productivity indicators next to heading */}
           <div className="heading-metrics">
             <article className="heading-metric" onClick={() => { setEditingAllGroupsBudget(true); setAllGroupsBudgetInput(String(allGroupsBudget || "")); }} style={{ cursor: "pointer" }}>
-              <span className="heading-metric-label">All Groups FTE <small style={{ fontWeight: 400, fontSize: "10px" }}>Weekly Avg</small></span>
-              <div className="heading-metric-value">{allGroupsFte.totalFTE}</div>
+              <span className="heading-metric-label">All Groups FTE <small style={{ fontWeight: 400, fontSize: "9px" }}>Weekly Avg</small></span>
+              <div className="heading-metric-value" style={allGroupsFteClass ? { color: allGroupsFteClass === "fte-out-of-range" ? "var(--error)" : allGroupsFteClass === "fte-warning" ? "var(--warning)" : "var(--success)" } : undefined}>{allGroupsFte.totalFTE}</div>
               {allGroupsBudget > 0 ? (
-                <small className={allGroupsFteOutOfRange ? "fte-out-of-range" : "fte-in-range"}>vs {allGroupsBudget} budgeted ({allGroupsFteVariance}%)</small>
+                <small className={allGroupsFteClass}>vs {allGroupsBudget} budgeted ({allGroupsFteVariance}%)</small>
               ) : (
                 <small>Click To Set Budget</small>
               )}
@@ -898,9 +946,20 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
         </div>
 
         {matrixMode === "schedule" && (
-          <button className="copy-schedule-btn" onClick={() => setShowCopyPrompt(true)}>
-            <Icon name="refresh" size={13} /> Copy From Previous Period
-          </button>
+          <>
+            <button className="copy-schedule-btn" onClick={() => setShowCopyPrompt(true)}>
+              <Icon name="refresh" size={13} /> Copy From Previous Period
+            </button>
+            <button className="clear-period-btn" onClick={() => {
+              setConfirmDialog({
+                title: "Clear All Assignments",
+                message: `This will permanently delete ALL shift assignments for ${currentGroup?.name || "this group"} in the current period (${formatDateRange(dates[0], rangeEnd)}). This cannot be undone. Are you sure?`,
+                onConfirm: handleClearAllAssignments,
+              });
+            }}>
+              <Icon name="trash" size={13} /> Clear All Assignments
+            </button>
+          </>
         )}
       </div>
 
@@ -929,10 +988,10 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           <section className="metrics">
             <article className="metric" onClick={() => { setEditingFte(true); setFteInput(String(fteCalculations.budget || "")); }} style={{ cursor: "pointer" }}>
               <div className="metric-top"><span>FTE (Weekly Avg)</span><Icon name="team" size={16} /></div>
-              <div className="metric-value">{fteCalculations.totalFTE}</div>
+              <div className="metric-value" style={fteCalculations.fteClass ? { color: fteCalculations.fteClass === "fte-out-of-range" ? "var(--error)" : fteCalculations.fteClass === "fte-warning" ? "var(--warning)" : "var(--success)" } : undefined}>{fteCalculations.totalFTE}</div>
               <small>
                 {fteCalculations.budget > 0 ? (
-                  <span className={fteCalculations.fteOutOfRange ? "fte-out-of-range" : "fte-in-range"}>
+                  <span className={fteCalculations.fteClass}>
                     vs {fteCalculations.budget} budgeted ({fteCalculations.fteVariance}%)
                   </span>
                 ) : (
@@ -1022,21 +1081,11 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                         </th>
                       ))}
                     </tr>
-                    <tr className="date-anchor-row">
-                      <th colSpan={2} />
-                      {dates.map((date) => (
-                        <th key={formatDateISO(date)} className={isWeekend(date) ? "weekend" : ""}>
-                          <small>{dayNames[date.getDay()]}</small>
-                        </th>
-                      ))}
-                    </tr>
                   </thead>
                   <tbody>
                     {opsHours.map((hour) => {
                       const hourMembers = membersByStartHour.get(hour) || [];
-                      const totalSlots = slotsForHour(hour);
-                      const productiveCount = hourMembers.filter((m) => m.status === "Productive").length;
-                      const openSlots = Math.max(0, totalSlots - productiveCount);
+                      const openSlots = slotsForHour(hour);
 
                       const isCollapsed = collapsedHours.has(hour);
                       return (
@@ -1122,8 +1171,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                                         });
                                         if (hadShift) {
                                           await data.logChange(`Removed ${member.name} from ${formatHour24(hour)} line in ${currentGroup?.name}`, "Matrix");
-                                          const a = await data.fetchShiftAssignments(selectedGroup, dates[0], rangeEnd);
-                                          setAssignments(a);
+                                          const a = await refreshAssignments();
                                           setHasDraftChanges(true);
                                           setUndoStack((prev) => [...prev, {
                                             description: `Remove ${member.name} from ${formatHour24(hour)}`,
@@ -1171,6 +1219,38 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                               </tr>
                             );
                           })}
+                          {/* Open slot rows — one per unfilled slot */}
+                          {!isCollapsed && Array.from({ length: openSlots }).map((_, slotIdx) => (
+                            <tr key={`open-${hour}-${slotIdx}`} className="open-slot-row">
+                              <td className="open-slot-status-cell">
+                                <span className="open-slot-badge">OPEN</span>
+                              </td>
+                              <td className="open-slot-name-cell">
+                                <span className="open-slot-label">Open Shift {slotIdx + 1}</span>
+                                <button
+                                  className="open-slot-delete-btn"
+                                  onClick={() => {
+                                    updateSlotAdjustment(hour, -1);
+                                    toast(`Removed slot at ${formatHour24(hour)}`);
+                                  }}
+                                  aria-label="Remove slot"
+                                >&#x2715;</button>
+                              </td>
+                              {dates.map((date) => {
+                                const dateISO = formatDateISO(date);
+                                return (
+                                  <td key={dateISO} className={isWeekend(date) ? "weekend" : ""}>
+                                    <button
+                                      className="shift-cell open-slot-shift"
+                                      onClick={() => setAssignPanel({ hour, dateISO })}
+                                    >
+                                      <span>+ Assign</span>
+                                    </button>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
                           {/* Subtotal row — always visible */}
                           <tr className={`shift-subtotal-row ${isCollapsed ? "collapsed" : ""}`}>
                             <td colSpan={2} className="shift-subtotal-label">Staff at {formatHour24(hour)}</td>

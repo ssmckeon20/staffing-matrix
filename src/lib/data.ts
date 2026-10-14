@@ -204,6 +204,16 @@ export async function upsertShiftAssignment(assignment: Partial<ShiftAssignment>
   }
 }
 
+export async function deleteAllAssignmentsInRange(groupId: string, startDateISO: string, endDateISO: string) {
+  const { error } = await supabase
+    .from("shift_assignments")
+    .delete()
+    .eq("group_id", groupId)
+    .gte("assignment_date", startDateISO)
+    .lte("assignment_date", endDateISO);
+  if (error) throw error;
+}
+
 export async function deleteShiftAssignment(memberId: string, date: string) {
   await supabase
     .from("shift_assignments")

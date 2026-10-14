@@ -67,10 +67,10 @@ export const isActiveAt = (start: string | null, end: string | null, hour: numbe
 };
 
 export const formatShiftDisplay = (start: string | null, end: string | null, status: ShiftStatus) => {
-  if (status === "Off" || (!start && !end)) return "-";
   if (status === "PTO") return "PTO";
   if (status === "LOA") return "LOA";
   if (status === "Vacation") return "Vacation";
+  if (status === "Off" || (!start && !end)) return "-";
   if (status === "Premium Pay") return `${start}-${end}`;
   if (!start || !end) return "-";
   return `${start}-${end}`;

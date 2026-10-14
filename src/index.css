@@ -500,32 +500,32 @@ input, select {
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 20px;
+  gap: 6px;
+  margin-bottom: 10px;
 }
 
 .metric {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px 18px;
+  padding: 6px 8px;
 }
 
 .metric-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 2px;
 }
 
 .metric-top span {
-  font-size: 12px;
+  font-size: 10px;
   color: var(--text-2);
   font-weight: 500;
 }
 
 .metric-value {
-  font-size: 28px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.1;
@@ -533,8 +533,8 @@ input, select {
 
 .metric small {
   display: block;
-  margin-top: 8px;
-  font-size: 12px;
+  margin-top: 2px;
+  font-size: 10px;
   color: var(--text-3);
 }
 
@@ -748,6 +748,25 @@ input, select {
   border-bottom: 1px solid var(--border-light);
 }
 
+/* Sticky left columns: Status + Team Member */
+.schedule-matrix th:nth-child(1),
+.schedule-matrix td:nth-child(1) {
+  position: sticky;
+  left: 0;
+  z-index: 7;
+  width: 90px;
+  min-width: 90px;
+  max-width: 90px;
+}
+
+.schedule-matrix th:nth-child(2),
+.schedule-matrix td:nth-child(2) {
+  position: sticky;
+  left: 90px;
+  z-index: 7;
+  box-shadow: 1px 0 0 var(--border);
+}
+
 .schedule-matrix thead th {
   font-weight: 600;
   font-size: 11px;
@@ -756,9 +775,15 @@ input, select {
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
   position: sticky;
-  top: 0;
+  top: 28px;
   z-index: 5;
   box-shadow: 0 1px 0 var(--border);
+}
+
+/* Header sticky-left cells need higher z-index to sit above body sticky cells */
+.schedule-matrix thead th:nth-child(1),
+.schedule-matrix thead th:nth-child(2) {
+  z-index: 8;
 }
 
 .schedule-matrix .week-band th {
@@ -772,6 +797,12 @@ input, select {
   top: 0;
   z-index: 6;
   box-shadow: 0 1px 0 var(--border);
+  position: sticky;
+}
+
+.schedule-matrix .week-band th:nth-child(1),
+.schedule-matrix .week-band th:nth-child(2) {
+  z-index: 9;
 }
 
 .schedule-matrix thead th strong {
@@ -787,6 +818,14 @@ input, select {
 
 .schedule-matrix .weekend {
   background: var(--weekend);
+}
+
+/* First two columns are sticky — never apply weekend tint to them */
+.schedule-matrix th:nth-child(1).weekend,
+.schedule-matrix td:nth-child(1).weekend,
+.schedule-matrix th:nth-child(2).weekend,
+.schedule-matrix td:nth-child(2).weekend {
+  background: var(--surface-2);
 }
 
 .shift-header-row td {
@@ -849,6 +888,28 @@ input, select {
 .name-cell {
   position: relative;
   min-width: 160px;
+  background: var(--surface);
+}
+
+.employee-row:hover .name-cell,
+.open-slot-row .name-cell {
+  background: var(--surface-2);
+}
+
+/* Ensure sticky left cells have opaque background */
+.schedule-matrix td:nth-child(1),
+.schedule-matrix td:nth-child(2) {
+  background: var(--surface);
+}
+
+.schedule-matrix tbody tr:hover td:nth-child(1),
+.schedule-matrix tbody tr:hover td:nth-child(2) {
+  background: var(--surface-2);
+}
+
+.schedule-matrix .weekend:nth-child(1),
+.schedule-matrix .weekend:nth-child(2) {
+  background: var(--surface);
 }
 
 .name-cell-inner {
@@ -942,27 +1003,20 @@ input, select {
   color: var(--primary);
 }
 
-/* Date anchor row — shows day of week as a sticky reference */
-.date-anchor-row th {
-  padding: 2px 8px !important;
-  font-size: 10px !important;
-  color: var(--text-3) !important;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border-light);
-  position: sticky;
-  top: 42px;
-  z-index: 4;
-}
-
-.date-anchor-row small {
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
 /* Open slot rows */
 .open-slot-row {
   background: var(--surface-2);
+}
+
+.open-slot-row td {
+  padding: 4px 8px;
+}
+
+.open-slot-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+  font-style: italic;
 }
 
 .open-slot-status-cell {
@@ -2505,11 +2559,19 @@ input, select {
 .fte-out-of-range {
   color: var(--error);
   font-weight: 700;
+  font-size: 13px;
 }
 
 .fte-in-range {
   color: var(--success);
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.fte-warning {
+  color: var(--warning);
+  font-weight: 700;
+  font-size: 13px;
 }
 
 /* Conflict modal */
@@ -3069,6 +3131,24 @@ input, select {
   background: var(--primary-light);
 }
 
+.clear-period-btn {
+  font-size: 11px;
+  color: var(--error);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--error-light);
+  background: var(--error-light);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.12s;
+}
+
+.clear-period-btn:hover {
+  background: #fdd0d0;
+}
+
 /* Volume bar scheduled overlay */
 .vt-bar-track {
   position: relative;
@@ -3128,7 +3208,7 @@ input, select {
   .sidebar, .topbar, .heading-actions, .matrix-footer,
   .view-type-bar, .matrix-action-bar, .published-info-bar,
   .matrix-group-tabs, .metrics, .note-header button,
-  .copy-schedule-btn, .group-filter-dropdown {
+  .copy-schedule-btn, .clear-period-btn, .group-filter-dropdown {
     display: none !important;
   }
   .main {
@@ -3224,8 +3304,8 @@ input, select {
   background: var(--surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
-  padding: 8px 14px;
-  min-width: 130px;
+  padding: 5px 10px;
+  min-width: 110px;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .heading-metric:hover {
@@ -3233,20 +3313,20 @@ input, select {
   box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
 .heading-metric-label {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--text-3);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .heading-metric-value {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--text-1);
-  margin: 2px 0;
+  margin: 1px 0;
 }
 .heading-metric small {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--text-3);
 }
 
