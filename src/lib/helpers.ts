@@ -66,14 +66,21 @@ export const isActiveAt = (start: string | null, end: string | null, hour: numbe
   return hour >= s && hour < e;
 };
 
+export const to12Hour = (time: string) => {
+  const [h, m] = time.split(":").map(Number);
+  const period = h < 12 ? "AM" : "PM";
+  const displayH = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${displayH}:${String(m).padStart(2, "0")} ${period}`;
+};
+
 export const formatShiftDisplay = (start: string | null, end: string | null, status: ShiftStatus) => {
   if (status === "PTO") return "PTO";
   if (status === "LOA") return "LOA";
   if (status === "Vacation") return "Vacation";
   if (status === "Off" || (!start && !end)) return "-";
-  if (status === "Premium Pay") return `${start}-${end}`;
+  if (status === "Premium Pay") return `${to12Hour(start)} - ${to12Hour(end)}`;
   if (!start || !end) return "-";
-  return `${start}-${end}`;
+  return `${to12Hour(start)} - ${to12Hour(end)}`;
 };
 
 export const compactShift = (start: string | null, end: string | null) => {

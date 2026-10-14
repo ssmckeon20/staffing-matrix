@@ -3204,18 +3204,47 @@ input, select {
 .team-status-badge.premium-pay { background: #ede9fe; color: #7c3aed; }
 .shift-cell.premium-pay { color: #7c3aed; background: #f5f3ff; border-color: #ddd6fe; }
 
+@page {
+  size: letter landscape;
+  margin: 0.4in;
+}
+
 @media print {
-  .sidebar, .topbar, .heading-actions, .matrix-footer,
-  .view-type-bar, .matrix-action-bar, .published-info-bar,
-  .matrix-group-tabs, .metrics, .note-header button,
-  .copy-schedule-btn, .clear-period-btn, .group-filter-dropdown {
+  body * {
+    visibility: hidden !important;
+  }
+  .print-card, .print-card * {
+    visibility: visible !important;
+  }
+  .print-card {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    border: none;
+    padding: 0;
+  }
+  .note-header button {
     display: none !important;
   }
-  .main {
+  .employee-table-wrap {
     overflow: visible !important;
+    width: 100% !important;
   }
-  body {
-    background: #fff;
+  .employee-table {
+    width: 100% !important;
+    font-size: 10px !important;
+    table-layout: auto !important;
+  }
+  .employee-table th,
+  .employee-table td {
+    padding: 4px 6px !important;
+  }
+  .employee-table tr {
+    break-inside: avoid;
+  }
+  .employee-table thead {
+    display: table-header-group;
   }
   .employee-table td.highlighted,
   .employee-table td.change-highlighted {
