@@ -9,6 +9,12 @@ import type {
   ScheduleHighlight,
   ChangeHistoryEntry,
   PublishedState,
+  CompanyHoliday,
+  VolumeDataPoint,
+  ScheduleTemplate,
+  ScheduleTemplateRow,
+  ShiftStatus,
+  PremiumPayType,
 } from "./types";
 import { formatDateISO } from "./helpers";
 
@@ -373,7 +379,7 @@ export async function publishSchedule(groupId: string, groupName: string, startD
     .update({ last_published_at: new Date().toISOString(), last_published_by: "Admin" })
     .eq("group_id", groupId);
 
-  await logChange(`Published schedule for "${groupName}"`, "Publish");
+  await logChange(`Posted schedule for "${groupName}"`, "Post");
 }
 
 export async function revertToLastPublished(groupId: string, groupName: string, startDate: Date, endDate: Date) {
@@ -389,7 +395,7 @@ export async function revertToLastPublished(groupId: string, groupName: string, 
     .gte("assignment_date", startISO)
     .lte("assignment_date", endISO);
 
-  await logChange(`Reverted "${groupName}" to last published schedule`, "Revert");
+  await logChange(`Reverted "${groupName}" to last posted schedule`, "Revert");
 }
 
 export async function fetchAllGroupData(groupId: string) {
@@ -400,4 +406,216 @@ export async function fetchAllGroupData(groupId: string) {
     fetchPublishedState(groupId),
   ]);
   return { members, volumePlan, fteBudget, publishedState };
+}
+
+export async function fetchCompanyHolidays(): Promise<CompanyHoliday[]> {
+  const { data, error } = await supabase
+    .from("company_holidays")
+    .select("*")
+    .order("holiday_date", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function upsertCompanyHoliday(holidayDate: string, name: string): Promise<CompanyHoliday> {
+  const existing = await supabase
+    .from("company_holidays")
+    .select("*")
+    .eq("holiday_date", holidayDate)
+    .maybeSingle();
+  if (existing.data) {
+    const { data, error } = await supabase
+      .from("company_holidays")
+      .update({ name, updated_at: new Date().toISOString() })
+      .eq("id", existing.data.id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data as CompanyHoliday;
+  }
+  const { data, error } = await supabase
+    .from("company_holidays")
+    .insert({ holiday_date: holidayDate, name })
+    .select()
+    .single();
+  if (error) throw error;
+  return data as CompanyHoliday;
+}
+
+export async function deleteCompanyHoliday(holidayDate: string) {
+  const { error } = await supabase
+    .from("company_holidays")
+    .delete()
+    .eq("holiday_date", holidayDate);
+  if (error) throw error;
+}
+
+export async function fetchVolumeDataPoints(groupId: string): Promise<VolumeDataPoint[]> {
+  const { data, error } = await supabase
+    .from("volume_data_points")
+    .select("*")
+    .eq("group_id", groupId)
+    .order("event_date", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function insertVolumeDataPoints(
+  points: Omit<VolumeDataPoint, "id" | "created_at">[]
+): Promise<number> {
+  if (points.length === 0) return 0;
+  const CHUNK = 500;
+  for (let i = 0; i < points.length; i += CHUNK) {
+    const { error } = await supabase.from("volume_data_points").insert(points.slice(i, i + CHUNK));
+    if (error) throw error;
+  }
+  return points.length;
+}
+
+export async function countVolumeDataPoints(groupId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from("volume_data_points")
+    .select("id", { count: "exact", head: true })
+    .eq("group_id", groupId);
+  if (error) throw error;
+  return count || 0;
+}
+
+export async function deleteAllVolumeDataPoints(groupId: string) {
+  const { error } = await supabase
+    .from("volume_data_points")
+    .delete()
+    .eq("group_id", groupId);
+  if (error) throw error;
+}
+
+// ===== Schedule Templates =====
+
+export async function fetchTemplates(groupId: string): Promise<ScheduleTemplate[]> {
+  const { data, error } = await supabase
+    .from("schedule_templates")
+    .select("*")
+    .eq("group_id", groupId)
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function fetchTemplateRows(templateId: string): Promise<ScheduleTemplateRow[]> {
+  const { data, error } = await supabase
+    .from("schedule_template_rows")
+    .select("*")
+    .eq("template_id", templateId);
+  if (error) throw error;
+  return data || [];
+}
+
+export interface TemplateRowInput {
+  member_id: string;
+  day_of_week: number;
+  day_offset: number;
+  shift_start: string | null;
+  shift_end: string | null;
+  status: ShiftStatus;
+  premium_pay_type?: PremiumPayType | null;
+  premium_pay_amount?: number | null;
+  include_as_non_prod?: boolean;
+  shift_override_break?: number | null;
+  borrowed_from_group_id?: string | null;
+}
+
+export async function findTemplateByName(groupId: string, name: string): Promise<ScheduleTemplate | null> {
+  const { data, error } = await supabase
+    .from("schedule_templates")
+    .select("*")
+    .eq("group_id", groupId)
+    .eq("name", name)
+    .maybeSingle();
+  if (error) throw error;
+  return data as ScheduleTemplate | null;
+}
+
+export async function createTemplate(
+  groupId: string,
+  name: string,
+  periodLengthDays: number,
+  startDayOfWeek: number,
+  createdBy: string | null,
+  rows: TemplateRowInput[]
+): Promise<ScheduleTemplate> {
+  const { data, error } = await supabase
+    .from("schedule_templates")
+    .insert({
+      group_id: groupId,
+      name,
+      period_length_days: periodLengthDays,
+      start_day_of_week: startDayOfWeek,
+      created_by: createdBy,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  const template = data as ScheduleTemplate;
+  if (rows.length > 0) {
+    const payload = rows.map((r) => ({
+      template_id: template.id,
+      member_id: r.member_id,
+      day_of_week: r.day_of_week,
+      day_offset: r.day_offset,
+      shift_start: r.shift_start,
+      shift_end: r.shift_end,
+      status: r.status,
+      premium_pay_type: r.premium_pay_type ?? null,
+      premium_pay_amount: r.premium_pay_amount ?? null,
+      include_as_non_prod: r.include_as_non_prod ?? false,
+      shift_override_break: r.shift_override_break ?? null,
+      borrowed_from_group_id: r.borrowed_from_group_id ?? null,
+    }));
+    const { error: rowErr } = await supabase.from("schedule_template_rows").insert(payload);
+    if (rowErr) throw rowErr;
+  }
+  return template;
+}
+
+export async function replaceTemplateRows(templateId: string, rows: TemplateRowInput[]): Promise<void> {
+  const { error: delErr } = await supabase
+    .from("schedule_template_rows")
+    .delete()
+    .eq("template_id", templateId);
+  if (delErr) throw delErr;
+  if (rows.length === 0) return;
+  const payload = rows.map((r) => ({
+    template_id: templateId,
+    member_id: r.member_id,
+    day_of_week: r.day_of_week,
+    day_offset: r.day_offset,
+    shift_start: r.shift_start,
+    shift_end: r.shift_end,
+    status: r.status,
+    premium_pay_type: r.premium_pay_type ?? null,
+    premium_pay_amount: r.premium_pay_amount ?? null,
+    include_as_non_prod: r.include_as_non_prod ?? false,
+    shift_override_break: r.shift_override_break ?? null,
+    borrowed_from_group_id: r.borrowed_from_group_id ?? null,
+  }));
+  const { error: rowErr } = await supabase.from("schedule_template_rows").insert(payload);
+  if (rowErr) throw rowErr;
+}
+
+export async function renameTemplate(templateId: string, newName: string): Promise<void> {
+  const { error } = await supabase
+    .from("schedule_templates")
+    .update({ name: newName, updated_at: new Date().toISOString() })
+    .eq("id", templateId);
+  if (error) throw error;
+}
+
+export async function deleteTemplate(templateId: string): Promise<void> {
+  const { error: rowsErr } = await supabase
+    .from("schedule_template_rows")
+    .delete()
+    .eq("template_id", templateId);
+  if (rowsErr) throw rowsErr;
+  const { error } = await supabase.from("schedule_templates").delete().eq("id", templateId);
+  if (error) throw error;
 }

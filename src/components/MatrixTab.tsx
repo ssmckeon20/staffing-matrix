@@ -1,15 +1,17 @@
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Fragment } from "react";
-import type { AssignmentGroup, TeamMember, ShiftAssignment, VolumePlan, FteBudget, PublishedState, ViewType, MatrixMode, ShiftStatus, PremiumPayType } from "../lib/types";
+import type { AssignmentGroup, TeamMember, ShiftAssignment, VolumePlan, FteBudget, PublishedState, ViewType, MatrixMode, ShiftStatus, PremiumPayType, CompanyHoliday, VolumeDataPoint, ScheduleTemplate } from "../lib/types";
 import * as data from "../lib/data";
+import { useAuth } from "../lib/auth";
+import { supabase } from "../lib/supabase";
 import { Icon, Button, Modal } from "./ui";
+import { parseFile, readFileToSheets, computeVolumeRecommendation } from "../lib/volumeImport";
 import {
   GROUP_COLORS, getDateRange, formatDateRange, formatDateISO, addDays,
   dayNames, isWeekend, generateHourLabels, hourLabel, formatHour24, slotEndForHour,
   inputTimeValue, shiftDuration, isActiveAt, formatShiftDisplay, hoursLabel,
   formatDate,
 } from "../lib/helpers";
-
 interface ToastFn { (msg: string): void; }
 
 interface SharedDateProps {
@@ -22,6 +24,8 @@ interface SharedDateProps {
 }
 
 export default function MatrixTab({ toast, viewType, setViewType, rangeStart, setRangeStart, payPeriodStart, setPayPeriodStart }: { toast: ToastFn } & SharedDateProps) {
+  const { canEdit } = useAuth();
+  const isAdmin = canEdit;
   const [groups, setGroups] = useState<AssignmentGroup[]>([]);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [assignments, setAssignments] = useState<ShiftAssignment[]>([]);
@@ -29,6 +33,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
   const [volumePlans, setVolumePlans] = useState<Record<string, VolumePlan>>({});
   const [fteBudgets, setFteBudgets] = useState<Record<string, FteBudget>>({});
   const [publishedStates, setPublishedStates] = useState<Record<string, PublishedState>>({});
+  const [holidays, setHolidays] = useState<CompanyHoliday[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -65,7 +70,18 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
   const [editPremiumType, setEditPremiumType] = useState<PremiumPayType | "">("");
   const [editPremiumAmount, setEditPremiumAmount] = useState<number>(0);
   const [editMultiDays, setEditMultiDays] = useState<Set<string>>(new Set());
-  const [showCopyPrompt, setShowCopyPrompt] = useState(false);
+
+  // Template state
+  const [templates, setTemplates] = useState<ScheduleTemplate[]>([]);
+  const [templatesModalOpen, setTemplatesModalOpen] = useState(false);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [templatePeriod, setTemplatePeriod] = useState<"current" | "7" | "14" | "30" | "custom">("current");
+  const [templateCustomDays, setTemplateCustomDays] = useState<number>(14);
+  const [templateNameError, setTemplateNameError] = useState<string>("");
+  const [pendingReplaceTemplate, setPendingReplaceTemplate] = useState<ScheduleTemplate | null>(null);
+  const [renameValue, setRenameValue] = useState<string>("");
+  const [templatesBusy, setTemplatesBusy] = useState(false);
 
   // Confirmation dialogs
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -99,6 +115,16 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
   const [vpWeekendMult, setVpWeekendMult] = useState(0.65);
   const [vpVolume, setVpVolume] = useState<number[]>(Array(24).fill(4));
   const [vpManualStaff, setVpManualStaff] = useState<number[]>(Array(24).fill(0));
+  const [vpAutoVolume, setVpAutoVolume] = useState(true);
+  const [vpAutoWeekend, setVpAutoWeekend] = useState(true);
+
+  // Volume data import state
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<string>("");
+  const [importError, setImportError] = useState("");
+  const [lastImportInfo, setLastImportInfo] = useState<string>("");
+  const [dataPointCount, setDataPointCount] = useState(0);
   const [slotAdjustments, setSlotAdjustments] = useState<Record<number, number>>(() => {
     if (typeof localStorage === "undefined") return {};
     const stored = localStorage.getItem("slotAdjustments");
@@ -112,14 +138,19 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     }
   };
 
-  const dates = useMemo(() => getDateRange(viewType, rangeStart), [viewType, rangeStart]);
+  const [customEndISO, setCustomEndISO] = useState<string>("");
+  const customDays = customEndISO
+    ? Math.max(1, Math.round((new Date(customEndISO + "T00:00:00").getTime() - rangeStart.getTime()) / 86400000) + 1)
+    : 2;
+  const dates = useMemo(() => getDateRange(viewType, rangeStart, customDays), [viewType, rangeStart, customDays]);
   const rangeEnd = dates[dates.length - 1];
 
   const loadAll = useCallback(async () => {
     try {
-      const [g, m] = await Promise.all([data.fetchGroups(), data.fetchAllMembers()]);
+      const [g, m, holidays] = await Promise.all([data.fetchGroups(), data.fetchAllMembers(), data.fetchCompanyHolidays()]);
       setGroups(g);
       setMembers(m);
+      setHolidays(holidays);
       if (g.length > 0 && !selectedGroup) setSelectedGroup(g[0].id);
 
       // Load volume plans, FTE budgets, published states for all groups
@@ -139,14 +170,6 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       setVolumePlans(vpMap);
       setFteBudgets(fbMap);
       setPublishedStates(psMap);
-
-      if (selectedGroup || g[0]) {
-        const gid = selectedGroup || g[0].id;
-        const a = await data.fetchShiftAssignments(gid, dates[0], rangeEnd);
-        setAssignments(a);
-      }
-      const allA = await data.fetchAllAssignmentsInRange(dates[0], rangeEnd);
-      setAllAssignments(allA);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -156,8 +179,15 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  // Holiday lookup by ISO date for the By Shift grid header/cells
+  const holidayByDate: Record<string, CompanyHoliday> = Object.fromEntries(
+    holidays.map((h) => [h.holiday_date, h])
+  );
+
   // Snap rangeStart to the start of the current pay period whenever payPeriodStart changes
+  // (skipped in custom mode so a hand-picked range isn't snapped away)
   useEffect(() => {
+    if (viewType === "custom") return;
     const ppStart = new Date(payPeriodStart + "T00:00:00");
     const now = new Date();
     const diffDays = Math.floor((now.getTime() - ppStart.getTime()) / (1000 * 60 * 60 * 24));
@@ -166,10 +196,15 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     setRangeStart(currentPeriodStart);
   }, [payPeriodStart]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Navigate by full pay periods (14 days for bi-weekly, 7 for weekly/daily, 30 for monthly)
+  // Navigate by full pay periods (14 days for bi-weekly, 7 for weekly/daily, 30 for monthly, custom length for custom)
   const navigatePeriod = (direction: number) => {
-    const step = viewType === "bi-weekly" ? 14 : viewType === "monthly" ? 30 : viewType === "daily" ? 1 : 7;
-    setRangeStart(addDays(rangeStart, step * direction));
+    const step = viewType === "bi-weekly" ? 14 : viewType === "monthly" ? 30 : viewType === "daily" ? 1 : viewType === "custom" ? customDays : 7;
+    const delta = step * direction;
+    setRangeStart(addDays(rangeStart, delta));
+    if (viewType === "custom") {
+      const baseEnd = customEndISO ? new Date(customEndISO + "T00:00:00") : addDays(rangeStart, 1);
+      setCustomEndISO(formatDateISO(addDays(baseEnd, delta)));
+    }
   };
 
   // Reload assignments when group or date range changes
@@ -186,7 +221,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
         setHasDraftChanges(a.some((x) => !x.is_published));
       } catch (e) { setError(String(e)); }
     })();
-  }, [selectedGroup, rangeStart, viewType]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedGroup, rangeStart, viewType, customDays]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reload all-groups assignments when date range changes (independent of selected group)
   useEffect(() => {
@@ -196,7 +231,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
         setAllAssignments(allA);
       } catch (e) { setError(String(e)); }
     })();
-  }, [rangeStart, viewType]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rangeStart, viewType, customDays]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load volume plan into editing state when group changes
   useEffect(() => {
@@ -217,7 +252,51 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
         setVpEnd(g.hours_of_service_end);
       }
     }
+    // Reset auto-calc flags per group (localStorage remembers overrides per group)
+    if (typeof localStorage !== "undefined") {
+      setVpAutoVolume(localStorage.getItem(`vpAutoVolume_${selectedGroup}`) !== "false");
+      setVpAutoWeekend(localStorage.getItem(`vpAutoWeekend_${selectedGroup}`) !== "false");
+    } else {
+      setVpAutoVolume(true);
+      setVpAutoWeekend(true);
+    }
   }, [selectedGroup, volumePlans, groups]);
+
+  // Recompute automatic volume whenever imported data or hours of operation change
+  const volumeDataPointsRef = useRef<VolumeDataPoint[]>([]);
+  useEffect(() => {
+    if (!selectedGroup) return;
+    (async () => {
+      try {
+        const pts = await data.fetchVolumeDataPoints(selectedGroup);
+        volumeDataPointsRef.current = pts;
+        setDataPointCount(pts.length);
+        if (pts.length > 0) {
+          const rec = computeVolumeRecommendation(
+            pts,
+            parseInt(vpStart.split(":")[0]),
+            parseInt(vpEnd.split(":")[0])
+          );
+          const first = pts[0];
+          const last = pts[pts.length - 1];
+          setLastImportInfo(`${pts.length.toLocaleString()} data points from ${first.event_date} to ${last.event_date}`);
+          if (vpAutoVolume) setVpVolume(rec.hourlyVolume);
+          if (vpAutoWeekend) setVpWeekendMult(rec.weekendMultiplier);
+        }
+      } catch (e) { setError(String(e)); }
+    })();
+  }, [selectedGroup, vpAutoVolume, vpAutoWeekend, vpStart, vpEnd]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load templates whenever the selected group changes (admin/editor only)
+  useEffect(() => {
+    if (!selectedGroup || !isAdmin) { setTemplates([]); return; }
+    (async () => {
+      try {
+        const t = await data.fetchTemplates(selectedGroup);
+        setTemplates(t);
+      } catch (e) { setError(String(e)); }
+    })();
+  }, [selectedGroup, isAdmin]);
 
   const currentGroup = groups.find((g) => g.id === selectedGroup);
   const groupMembers = members.filter((m) => m.group_id === selectedGroup);
@@ -248,12 +327,18 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     return { start: null, end: null, status: "Off" };
   };
 
-  // Check if a shift counts as hours (scheduled, premium, or alt-status if per-assignment flag is set)
+  // Check if a shift counts as hours (scheduled/premium = productive; PTO/LOA/Vacation/Training count only when the user opted in)
+  const NON_PROD_STATUSES: ShiftStatus[] = ["PTO", "LOA", "Vacation", "Training"];
   const shiftCountsAsHours = (status: ShiftStatus, assignment?: ShiftAssignment): boolean => {
     if (status === "Scheduled" || status === "Premium Pay") return true;
-    if (assignment?.include_as_non_prod && (status === "PTO" || status === "LOA" || status === "Vacation")) return true;
+    if (assignment?.include_as_non_prod && NON_PROD_STATUSES.includes(status)) return true;
     return false;
   };
+  const isNonProdShift = (status: ShiftStatus, assignment?: ShiftAssignment): boolean =>
+    !!assignment?.include_as_non_prod && NON_PROD_STATUSES.includes(status);
+
+  // Statuses whose editor shows shift times (everything except Off)
+  const hasShiftTimes = (status: ShiftStatus): boolean => status !== "Off";
 
   // Calculate scheduled hours for a member across all dates (excluding unpaid breaks)
   const memberScheduledHours = (member: TeamMember): number => {
@@ -328,7 +413,6 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
  return Math.round(ot * 10) / 10;
   };
 
-  // Effective hourly rate for a shift assignment including premium pay
   const effectiveRate = (assignment: ShiftAssignment | undefined, member: TeamMember): number => {
     const baseRate = member.hourly_rate || 0;
     if (!assignment || assignment.status !== "Premium Pay" || !assignment.premium_pay_type) return baseRate;
@@ -386,8 +470,8 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
         const dur = shiftDuration(a.shift_start, a.shift_end);
         const breakMins = a.shift_override_break != null ? a.shift_override_break : m.daily_unpaid_break;
         const paidHrs = Math.max(0, dur - breakMins);
-        if (m.status === "Productive") totalProductiveHours += paidHrs;
-        else totalNonProdHours += paidHrs;
+        if (isNonProdShift(status, a)) totalNonProdHours += paidHrs;
+        else totalProductiveHours += paidHrs;
       }
     }
     const weeklyProductive = Math.round((totalProductiveHours / numWeeks) * 10) / 10;
@@ -412,17 +496,16 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     const calcWeekHours = (weekDates: Date[], productiveOnly: boolean) => {
       let total = 0;
       for (const member of groupMembers) {
-        if (productiveOnly && member.status !== "Productive") continue;
-        if (!productiveOnly && member.status === "Productive") continue;
         for (const date of weekDates) {
           const dateISO = formatDateISO(date);
           const a = getMemberAssignment(member.id, dateISO);
           const shift = getMemberShiftForDate(member.id, dateISO);
-          if (shiftCountsAsHours(shift.status, a) && shift.start && shift.end) {
-            const dur = shiftDuration(shift.start, shift.end);
-            const breakMins = a?.shift_override_break != null ? a.shift_override_break : member.daily_unpaid_break;
-            total += Math.max(0, dur - breakMins);
-          }
+          if (!shiftCountsAsHours(shift.status, a) || !shift.start || !shift.end) continue;
+          const productive = !isNonProdShift(shift.status, a);
+          if (productiveOnly !== productive) continue;
+          const dur = shiftDuration(shift.start, shift.end);
+          const breakMins = a?.shift_override_break != null ? a.shift_override_break : member.daily_unpaid_break;
+          total += Math.max(0, dur - breakMins);
         }
       }
       return Math.round(total * 10) / 10;
@@ -528,8 +611,8 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       setEditIncludeNonProd(false);
       setEditLunchBreak(a?.shift_override_break != null ? a.shift_override_break : null);
     } else if (shift.status !== "Scheduled" && shift.status !== "Off" && shift.status !== "Premium Pay") {
-      setEditStart("");
-      setEditEnd("");
+      setEditStart(shift.start || `${String(hour).padStart(2, "0")}:00`);
+      setEditEnd(shift.end || slotEndForHour(hour));
       setEditStatus(shift.status);
       setEditPremiumType("");
       setEditPremiumAmount(0);
@@ -552,11 +635,12 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     if (!editingMember) return;
     const status: ShiftStatus = editStatus;
     const isPremium = status === "Premium Pay";
-    const shiftStart = (status === "Scheduled" || isPremium) ? editStart : null;
-    const shiftEnd = (status === "Scheduled" || isPremium) ? editEnd : null;
+    const hasTimes = status !== "Off";
+    const shiftStart = hasTimes ? editStart : null;
+    const shiftEnd = hasTimes ? editEnd : null;
     const premiumType = isPremium && editPremiumType ? editPremiumType : null;
     const premiumAmt = isPremium && editPremiumType ? editPremiumAmount : null;
-    const includeNonProd = (status === "PTO" || status === "LOA" || status === "Vacation") && editIncludeNonProd;
+    const includeNonProd = (status === "PTO" || status === "LOA" || status === "Vacation" || status === "Training") && editIncludeNonProd;
 
     const datesToSave = [editingDate, ...Array.from(editMultiDays).filter((d) => d !== editingDate)];
 
@@ -737,13 +821,14 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
   };
 
   const handleSaveDraft = async () => {
+    if (!canEdit) return;
     // Draft assignments are already saved to DB; just log it
     await data.logChange(`Saved draft for ${currentGroup?.name}`, "Save Draft");
     toast("Draft saved");
   };
 
   const handlePublish = async () => {
-    if (!currentGroup) return;
+    if (!currentGroup || !canEdit) return;
     await data.publishSchedule(selectedGroup, currentGroup.name, dates[0], rangeEnd);
     if (typeof localStorage !== "undefined") localStorage.removeItem(`slotAdj_${selectedGroup}`);
     setSlotAdjustments({});
@@ -753,11 +838,11 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     // Reload published states
     const ps = await data.fetchPublishedState(selectedGroup);
     if (ps) setPublishedStates({ ...publishedStates, [selectedGroup]: ps });
-    toast("Schedules published to Employee Schedule");
+    toast("Schedules posted to Employee Schedule");
   };
 
   const handleUndo = async () => {
-    if (undoStack.length === 0) { toast("Nothing to undo"); return; }
+    if (undoStack.length === 0 || !canEdit) { toast("Nothing to undo"); return; }
     const last = undoStack[undoStack.length - 1];
     await last.action();
     setUndoStack(undoStack.slice(0, -1));
@@ -765,26 +850,8 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     toast(`Undid: ${last.description}`);
   };
 
-  const handleRevert = async () => {
-    if (!currentGroup) return;
-    setConfirmDialog({
-      title: "Revert to Published",
-      message: "This will undo all changes made since the last publication. Any draft shifts you've added or edited will be permanently removed. Are you sure you want to continue?",
-      onConfirm: async () => {
-        setConfirmDialog(null);
-        await data.revertToLastPublished(selectedGroup, currentGroup.name, dates[0], rangeEnd);
-        if (typeof localStorage !== "undefined") localStorage.removeItem(`slotAdj_${selectedGroup}`);
-        setSlotAdjustments({});
-        setUndoStack([]);
-        const a = await refreshAssignments();
-        setHasDraftChanges(false);
-        toast("Reverted to last published schedule");
-      },
-    });
-  };
-
   const saveVolumePlan = async () => {
-    if (!selectedGroup) return;
+    if (!selectedGroup || !canEdit) return;
     await data.updateVolumePlan(selectedGroup, {
       enabled: vpEnabled,
       hours_of_service_start: vpStart,
@@ -798,8 +865,86 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     toast("Volume plan saved");
   };
 
+  const handleVolumeDataFile = async (file: File) => {
+    if (!canEdit) return;
+    setImporting(true);
+    setImportError("");
+    setImportResult("");
+    try {
+      const sheets = await readFileToSheets(file);
+      const { points, stats } = parseFile(sheets);
+      if (points.length === 0) {
+        setImportError(`No rows with recognizable dates/times were found. ${stats.rowsSkipped} rows were skipped. Make sure the file has a date/time column (e.g. "Date" + "Time", or "Timestamp").`);
+        return;
+      }
+      const payloads = points.map((p) => ({
+        group_id: selectedGroup,
+        event_date: p.date,
+        day_of_week: p.dayOfWeek,
+        hour: p.hour,
+        count: 1,
+      }));
+      await data.insertVolumeDataPoints(payloads);
+      const pts = await data.fetchVolumeDataPoints(selectedGroup);
+      volumeDataPointsRef.current = pts;
+      setDataPointCount(pts.length);
+      const rec = computeVolumeRecommendation(
+        pts,
+        parseInt(vpStart.split(":")[0]),
+        parseInt(vpEnd.split(":")[0])
+      );
+      if (vpAutoVolume) setVpVolume(rec.hourlyVolume);
+      if (vpAutoWeekend) setVpWeekendMult(rec.weekendMultiplier);
+      setImportResult(
+        `Imported ${stats.rowsImported.toLocaleString()} rows${stats.rowsSkipped > 0 ? ` (${stats.rowsSkipped.toLocaleString()} skipped)` : ""} covering ${stats.dateFrom} to ${stats.dateTo}.` +
+        (vpAutoVolume || vpAutoWeekend ? " Expected volume and weekend multiplier were updated automatically." : "")
+      );
+      await data.logChange(`Imported ${stats.rowsImported} rows of operational data for ${currentGroup?.name}`, "Volume Plan");
+    } catch (e) {
+      setImportError(`Could not read the file: ${String(e)}`);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  // Guarded manual overrides — confirm before leaving automatic calculation
+  const guardOverride = (kind: "volume" | "weekend", proceed: () => void) => {
+    const isAuto = kind === "volume" ? vpAutoVolume : vpAutoWeekend;
+    if (!isAuto) { proceed(); return; }
+    setConfirmDialog({
+      title: "Override Automatic Calculation?",
+      message:
+        kind === "volume"
+          ? "Expected volume is currently calculated automatically from your imported data. If you enter a value manually, this hour will no longer update automatically until you re-enable auto calculation. Continue?"
+          : "The weekend multiplier is currently calculated automatically from your imported data. If you enter a value manually, it will no longer update automatically until you re-enable auto calculation. Continue?",
+      onConfirm: () => {
+        setConfirmDialog(null);
+        if (kind === "volume") {
+          setVpAutoVolume(false);
+          if (typeof localStorage !== "undefined") localStorage.setItem(`vpAutoVolume_${selectedGroup}`, "false");
+        } else {
+          setVpAutoWeekend(false);
+          if (typeof localStorage !== "undefined") localStorage.setItem(`vpAutoWeekend_${selectedGroup}`, "false");
+        }
+        proceed();
+      },
+    });
+  };
+
+  const overrideHourlyVolume = (hour: number, value: number) => {
+    guardOverride("volume", () => {
+      const v = [...vpVolume];
+      v[hour] = value;
+      setVpVolume(v);
+    });
+  };
+
+  const overrideWeekendMult = (value: number) => {
+    guardOverride("weekend", () => setVpWeekendMult(value));
+  };
+
   const saveFteBudget = async () => {
-    if (!selectedGroup) return;
+    if (!selectedGroup || !canEdit) return;
     await data.upsertFteBudget(selectedGroup, Number(fteInput) || 0);
     const fb = await data.fetchFteBudget(selectedGroup);
     if (fb) setFteBudgets({ ...fteBudgets, [selectedGroup]: fb });
@@ -807,51 +952,241 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
     toast("FTE budget saved");
   };
 
-  const handleCopyFromPrevious = async () => {
-    if (!selectedGroup) return;
-    const periodLen = dates.length;
-    const prevEnd = addDays(dates[0], -1);
-    const prevStart = addDays(prevEnd, -(periodLen - 1));
-    const prevAssignments = await data.fetchShiftAssignments(selectedGroup, prevStart, prevEnd);
-    if (prevAssignments.length === 0) {
-      toast("No shifts found in previous period to copy");
-      setShowCopyPrompt(false);
-      return;
+  // ===== Template logic =====
+
+  // Compute the pay-period start date that contains the first day of the current view.
+  const payPeriodAnchorForCurrentView = (): Date => {
+    const ppStart = new Date(payPeriodStart + "T00:00:00");
+    const diffDays = Math.floor((dates[0].getTime() - ppStart.getTime()) / (1000 * 60 * 60 * 24));
+    const periodsElapsed = Math.floor(diffDays / 14);
+    return addDays(ppStart, periodsElapsed * 14);
+  };
+
+  const resolveTemplatePeriod = (): { lengthDays: number; start: Date } => {
+    const anchor = payPeriodAnchorForCurrentView();
+    if (templatePeriod === "current") {
+      return { lengthDays: dates.length, start: anchor };
     }
-    const prevDates = Array.from({ length: periodLen }, (_, i) => addDays(prevStart, i));
-    let copied = 0;
-    for (const a of prevAssignments) {
-      if (a.status !== "Scheduled" && a.status !== "Premium Pay") continue;
-      const prevDate = new Date(a.assignment_date + "T00:00:00");
-      const dayOffset = Math.round((prevDate.getTime() - prevStart.getTime()) / (1000 * 60 * 60 * 24));
-      if (dayOffset < 0 || dayOffset >= periodLen) continue;
-      const newDate = dates[dayOffset];
-      const newDateISO = formatDateISO(newDate);
-        await data.upsertShiftAssignment({
-          member_id: a.member_id,
-          group_id: selectedGroup,
-          assignment_date: newDateISO,
-          shift_start: a.shift_start,
-          shift_end: a.shift_end,
-          status: a.status,
-          is_published: false,
-          borrowed_from_group_id: a.borrowed_from_group_id,
-          premium_pay_type: a.premium_pay_type as any,
-          premium_pay_amount: a.premium_pay_amount as any,
-          include_as_non_prod: a.include_as_non_prod || false,
-          shift_override_break: a.shift_override_break ?? null,
+    const days = templatePeriod === "custom" ? Math.max(1, templateCustomDays) : Number(templatePeriod);
+    return { lengthDays: days, start: anchor };
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!selectedGroup || !isAdmin) return;
+    const name = templateName.trim();
+    if (!name) { setTemplateNameError("Give the template a name."); return; }
+    const { lengthDays, start } = resolveTemplatePeriod();
+    const end = addDays(start, lengthDays - 1);
+    setTemplatesBusy(true);
+    setTemplateNameError("");
+    try {
+      const periodAssignments = await data.fetchShiftAssignments(selectedGroup, start, end);
+      const rows: data.TemplateRowInput[] = periodAssignments
+        .filter((a) => a.status !== "Off")
+        .map((a) => {
+          const d = new Date(a.assignment_date + "T00:00:00");
+          const dayOffset = Math.round((d.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+          return {
+            member_id: a.member_id,
+            day_of_week: d.getDay(),
+            day_offset: dayOffset,
+            shift_start: a.shift_start,
+            shift_end: a.shift_end,
+            status: a.status,
+            premium_pay_type: (a.premium_pay_type ?? null) as PremiumPayType | null,
+            premium_pay_amount: a.premium_pay_amount ?? null,
+            include_as_non_prod: a.include_as_non_prod ?? false,
+            shift_override_break: a.shift_override_break ?? null,
+            borrowed_from_group_id: a.borrowed_from_group_id ?? null,
+          };
         });
-      copied++;
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData.user?.id ?? null;
+      const existing = await data.findTemplateByName(selectedGroup, name);
+      if (existing) {
+        setPendingReplaceTemplate(existing);
+        setRenameValue(name);
+        setTemplatesBusy(false);
+        return;
+      }
+      await data.createTemplate(selectedGroup, name, lengthDays, start.getDay(), userId, rows);
+      await data.logChange(`Saved schedule template "${name}" for ${currentGroup?.name} (${lengthDays} days)`, "Template");
+      const refreshed = await data.fetchTemplates(selectedGroup);
+      setTemplates(refreshed);
+      setSaveTemplateOpen(false);
+      toast(`Template "${name}" saved`);
+    } catch (e) {
+      setTemplateNameError(String((e as Error).message ?? e));
+    } finally {
+      setTemplatesBusy(false);
     }
-    await data.logChange(`Copied schedule from previous period for ${currentGroup?.name}`, "Matrix");
-    const refreshed = await refreshAssignments();
-    setHasDraftChanges(true);
-    setShowCopyPrompt(false);
-    toast(`Copied ${copied} shifts from previous period`);
+  };
+
+  const handleReplaceTemplate = async () => {
+    if (!pendingReplaceTemplate || !selectedGroup) return;
+    const name = pendingReplaceTemplate.name;
+    const { lengthDays, start } = resolveTemplatePeriod();
+    const end = addDays(start, lengthDays - 1);
+    setTemplatesBusy(true);
+    try {
+      const periodAssignments = await data.fetchShiftAssignments(selectedGroup, start, end);
+      const rows: data.TemplateRowInput[] = periodAssignments
+        .filter((a) => a.status !== "Off")
+        .map((a) => {
+          const d = new Date(a.assignment_date + "T00:00:00");
+          const dayOffset = Math.round((d.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+          return {
+            member_id: a.member_id,
+            day_of_week: d.getDay(),
+            day_offset: dayOffset,
+            shift_start: a.shift_start,
+            shift_end: a.shift_end,
+            status: a.status,
+            premium_pay_type: (a.premium_pay_type ?? null) as PremiumPayType | null,
+            premium_pay_amount: a.premium_pay_amount ?? null,
+            include_as_non_prod: a.include_as_non_prod ?? false,
+            shift_override_break: a.shift_override_break ?? null,
+            borrowed_from_group_id: a.borrowed_from_group_id ?? null,
+          };
+        });
+      await data.replaceTemplateRows(pendingReplaceTemplate.id, rows);
+      await data.logChange(`Replaced schedule template "${name}" for ${currentGroup?.name}`, "Template");
+      setPendingReplaceTemplate(null);
+      setSaveTemplateOpen(false);
+      toast(`Template "${name}" replaced`);
+    } catch (e) {
+      setTemplateNameError(String((e as Error).message ?? e));
+    } finally {
+      setTemplatesBusy(false);
+    }
+  };
+
+  const handleRenameAndSave = async () => {
+    if (!pendingReplaceTemplate || !selectedGroup) return;
+    const name = renameValue.trim();
+    if (!name) { setTemplateNameError("Enter a new name."); return; }
+    setTemplatesBusy(true);
+    setTemplateNameError("");
+    try {
+      const dup = await data.findTemplateByName(selectedGroup, name);
+      if (dup && dup.id !== pendingReplaceTemplate.id) {
+        setTemplateNameError("That name is also taken. Choose another.");
+        setTemplatesBusy(false);
+        return;
+      }
+      const { lengthDays, start } = resolveTemplatePeriod();
+      const end = addDays(start, lengthDays - 1);
+      const periodAssignments = await data.fetchShiftAssignments(selectedGroup, start, end);
+      const rows: data.TemplateRowInput[] = periodAssignments
+        .filter((a) => a.status !== "Off")
+        .map((a) => {
+          const d = new Date(a.assignment_date + "T00:00:00");
+          const dayOffset = Math.round((d.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+          return {
+            member_id: a.member_id,
+            day_of_week: d.getDay(),
+            day_offset: dayOffset,
+            shift_start: a.shift_start,
+            shift_end: a.shift_end,
+            status: a.status,
+            premium_pay_type: (a.premium_pay_type ?? null) as PremiumPayType | null,
+            premium_pay_amount: a.premium_pay_amount ?? null,
+            include_as_non_prod: a.include_as_non_prod ?? false,
+            shift_override_break: a.shift_override_break ?? null,
+            borrowed_from_group_id: a.borrowed_from_group_id ?? null,
+          };
+        });
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData.user?.id ?? null;
+      await data.createTemplate(selectedGroup, name, lengthDays, start.getDay(), userId, rows);
+      await data.logChange(`Saved schedule template "${name}" for ${currentGroup?.name}`, "Template");
+      const refreshed = await data.fetchTemplates(selectedGroup);
+      setTemplates(refreshed);
+      setPendingReplaceTemplate(null);
+      setSaveTemplateOpen(false);
+      toast(`Template "${name}" saved`);
+    } catch (e) {
+      setTemplateNameError(String((e as Error).message ?? e));
+    } finally {
+      setTemplatesBusy(false);
+    }
+  };
+
+  const handleApplyTemplate = async (template: ScheduleTemplate) => {
+    if (!selectedGroup || !isAdmin) return;
+    setTemplatesBusy(true);
+    try {
+      const rows = await data.fetchTemplateRows(template.id);
+      const anchor = payPeriodAnchorForCurrentView();
+      const periodLen = template.period_length_days;
+      const end = addDays(anchor, periodLen - 1);
+      // Clear existing assignments in the template's full window
+      await data.deleteAllAssignmentsInRange(selectedGroup, formatDateISO(anchor), formatDateISO(end));
+      // Re-create shifts from the template, mapping day_offset to real dates
+      let created = 0;
+      for (const r of rows) {
+        if (r.day_offset < 0 || r.day_offset >= periodLen) continue;
+        const targetDate = addDays(anchor, r.day_offset);
+        const targetISO = formatDateISO(targetDate);
+        await data.upsertShiftAssignment({
+          member_id: r.member_id,
+          group_id: selectedGroup,
+          assignment_date: targetISO,
+          shift_start: r.shift_start,
+          shift_end: r.shift_end,
+          status: r.status,
+          is_published: false,
+          borrowed_from_group_id: r.borrowed_from_group_id,
+          premium_pay_type: (r.premium_pay_type ?? null) as PremiumPayType | null,
+          premium_pay_amount: r.premium_pay_amount ?? null,
+          include_as_non_prod: r.include_as_non_prod ?? false,
+          shift_override_break: r.shift_override_break ?? null,
+        });
+        created++;
+      }
+      // Expand the view to show the template's full period
+      if (periodLen !== dates.length) {
+        if (viewType === "custom") {
+          setCustomEndISO(formatDateISO(end));
+        } else {
+          const newType: ViewType = periodLen === 7 ? "weekly" : periodLen === 14 ? "bi-weekly" : periodLen === 30 ? "monthly" : "custom";
+          if (newType === "custom") {
+            setViewType("custom");
+            setCustomEndISO(formatDateISO(end));
+          } else {
+            setViewType(newType);
+          }
+        }
+        setRangeStart(anchor);
+      }
+      await data.logChange(`Applied template "${template.name}" to ${currentGroup?.name}`, "Template");
+      setTemplatesModalOpen(false);
+      toast(`Applied template "${template.name}" — ${created} shifts created`);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setTemplatesBusy(false);
+    }
+  };
+
+  const handleDeleteTemplate = async (template: ScheduleTemplate) => {
+    if (!selectedGroup || !isAdmin) return;
+    setTemplatesBusy(true);
+    try {
+      await data.deleteTemplate(template.id);
+      await data.logChange(`Deleted schedule template "${template.name}"`, "Template");
+      const refreshed = await data.fetchTemplates(selectedGroup);
+      setTemplates(refreshed);
+      toast(`Template "${template.name}" deleted`);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setTemplatesBusy(false);
+    }
   };
 
   const handleClearAllAssignments = async () => {
-    if (!selectedGroup) return;
+    if (!selectedGroup || !canEdit) return;
     const startISO = formatDateISO(dates[0]);
     const endISO = formatDateISO(rangeEnd);
     await data.deleteAllAssignmentsInRange(selectedGroup, startISO, endISO);
@@ -865,6 +1200,10 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
 
   const shiftViewType = (newType: ViewType) => {
     setViewType(newType);
+    if (newType === "custom") {
+      setCustomEndISO(formatDateISO(addDays(rangeStart, 1)));
+      return;
+    }
     const ppStart = new Date(payPeriodStart + "T00:00:00");
     const now = new Date();
     const diffDays = Math.floor((now.getTime() - ppStart.getTime()) / (1000 * 60 * 60 * 24));
@@ -876,7 +1215,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
   const publishedInfo = publishedStates[selectedGroup];
   const publishedLabel = publishedInfo?.last_published_at
     ? new Date(publishedInfo.last_published_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })
-    : "Not Yet Published";
+    : "Not Yet Posted";
 
   const allGroupsFteVariance = allGroupsBudget > 0 ? Math.round((allGroupsFte.totalFTE / allGroupsBudget) * 100) : 0;
   const allGroupsFteClass = allGroupsBudget > 0
@@ -939,16 +1278,40 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
           <button className={viewType === "weekly" ? "active" : ""} onClick={() => shiftViewType("weekly")}>Weekly</button>
           <button className={viewType === "bi-weekly" ? "active" : ""} onClick={() => shiftViewType("bi-weekly")}>Bi-Weekly</button>
           <button className={viewType === "monthly" ? "active" : ""} onClick={() => shiftViewType("monthly")}>Monthly</button>
+          <button className={viewType === "custom" ? "active" : ""} onClick={() => shiftViewType("custom")}>Custom</button>
         </div>
+        {viewType === "custom" && (
+          <div className="custom-range-picker">
+            <input
+              type="date"
+              value={formatDateISO(rangeStart)}
+              onChange={(e) => {
+                if (!e.target.value) return;
+                const newStart = new Date(e.target.value + "T00:00:00");
+                setRangeStart(newStart);
+                if (customEndISO && new Date(customEndISO + "T00:00:00") < addDays(newStart, 1)) {
+                  setCustomEndISO(formatDateISO(addDays(newStart, 1)));
+                }
+              }}
+            />
+            <span>to</span>
+            <input
+              type="date"
+              value={customEndISO || formatDateISO(addDays(rangeStart, 1))}
+              min={formatDateISO(addDays(rangeStart, 1))}
+              onChange={(e) => { if (e.target.value) setCustomEndISO(e.target.value); }}
+            />
+          </div>
+        )}
         <div className="pay-period-control">
           <label>Pay Period Start:</label>
           <input type="date" value={payPeriodStart} onChange={(e) => { setPayPeriodStart(e.target.value); if (typeof localStorage !== "undefined") localStorage.setItem("payPeriodStart", e.target.value); }} />
         </div>
 
-        {matrixMode === "schedule" && (
+        {matrixMode === "schedule" && isAdmin && (
           <>
-            <button className="copy-schedule-btn" onClick={() => setShowCopyPrompt(true)}>
-              <Icon name="refresh" size={13} /> Copy From Previous Period
+            <button className="copy-schedule-btn" onClick={() => { setTemplatesModalOpen(true); }}>
+              <Icon name="layout" size={13} /> Templates
             </button>
             <button className="clear-period-btn" onClick={() => {
               setConfirmDialog({
@@ -1010,7 +1373,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
               <small>Including OT & premium pay</small>
             </article>
             <article className="metric">
-              <div className="metric-top"><span>Published</span><Icon name="check" size={16} /></div>
+              <div className="metric-top"><span>Posted</span><Icon name="check" size={16} /></div>
               <div className="metric-value" style={{ fontSize: "14px" }}>{publishedLabel}</div>
               <small>{hasDraftChanges ? "Draft changes pending" : "No draft changes"}</small>
             </article>
@@ -1021,15 +1384,15 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
             <div className="draft-status">
               {hasDraftChanges && (
                 <div className="draft-warning">
-                  <Icon name="alert" size={14} /> Staffing matrix saved but not published
+                  <Icon name="alert" size={14} /> Staffing matrix saved but not posted
                 </div>
               )}
             </div>
             <div className="matrix-actions">
               <Button icon="undo" onClick={handleUndo}>Undo last change</Button>
-              <Button icon="refresh" onClick={handleRevert}>Revert to published</Button>
               <Button icon="save" onClick={handleSaveDraft}>Save draft</Button>
-              <Button variant="primary" icon="check" onClick={handlePublish}>Publish schedules</Button>
+              {isAdmin && <Button icon="layout" onClick={() => { setTemplateName(""); setTemplatePeriod("current"); setTemplateNameError(""); setSaveTemplateOpen(true); }}>Save Template</Button>}
+              <Button variant="primary" icon="check" onClick={handlePublish}>Post schedules</Button>
             </div>
           </div>
 
@@ -1052,6 +1415,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                     <span><i className="legend-ot" />Overtime</span>
                     <span><i className="legend-premium" />Premium Pay</span>
                     <span><i className="legend-diff-time" />Different Shift Time</span>
+                    <span><i className="legend-draft-edited" />Edited (Not Posted)</span>
                   </div>
                 )}
               </div>
@@ -1062,7 +1426,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                 <table className="schedule-matrix">
                   <thead>
                     <tr className="week-band">
-                      <th colSpan={2}>Shift And Staff</th>
+                      <th>Shift And Staff</th>
                       {Array.from({ length: Math.ceil(dates.length / 7) }, (_, wi) => {
                         const wkStart = dates[wi * 7];
                         const wkEnd = dates[Math.min((wi + 1) * 7 - 1, dates.length - 1)];
@@ -1072,14 +1436,18 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                       })}
                     </tr>
                     <tr>
-                      <th>Status</th>
                       <th>Team Member</th>
-                      {dates.map((date) => (
-                        <th key={formatDateISO(date)} className={isWeekend(date) ? "weekend" : ""}>
-                          <strong>{dayNames[date.getDay()]}</strong>
-                          <span>{formatDate(date)}</span>
-                        </th>
-                      ))}
+                      {dates.map((date) => {
+                        const dateISO = formatDateISO(date);
+                        const holiday = holidayByDate[dateISO];
+                        return (
+                          <th key={dateISO} className={`${isWeekend(date) ? "weekend" : ""} ${holiday ? "holiday-col" : ""}`}>
+                            {holiday && <em className="holiday-name">{holiday.name}</em>}
+                            <strong>{dayNames[date.getDay()]}</strong>
+                            <span>{formatDate(date)}</span>
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
@@ -1104,9 +1472,13 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                                 <Icon name="plus" size={11} />Add Slot
                               </button>
                             </td>
-                            {dates.map((date) => (
-                              <td key={formatDateISO(date)} className={isWeekend(date) ? "weekend" : ""} />
-                            ))}
+                            {dates.map((date) => {
+                              const dateISO = formatDateISO(date);
+                              const isHolidayCol = !!holidayByDate[dateISO];
+                              return (
+                                <td key={dateISO} className={`${isWeekend(date) ? "weekend" : ""} ${isHolidayCol ? "holiday-col" : ""}`} />
+                              );
+                            })}
                           </tr>
                           {!isCollapsed && hourMembers.map((member) => {
                             const schedHrs = memberScheduledHours(member);
@@ -1122,22 +1494,6 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                             }
                             return (
                               <tr key={member.id} className={`employee-row ${member.status !== "Productive" ? "nonproductive-row" : ""}`}>
-                                <td>
-                                  <select
-                                    className={`status-select ${(member.status || "productive").toLowerCase()}`}
-                                    value={member.status}
-                                    onChange={async (e) => {
-                                      await data.updateMember(member.id, { status: e.target.value as TeamMember["status"] });
-                                      const m = await data.fetchAllMembers();
-                                      setMembers(m);
-                                      toast(`${member.name} marked as ${e.target.value}`);
-                                    }}
-                                  >
-                                    <option>Productive</option>
-                                    <option>Training</option>
-                                    <option>Vacation</option>
-                                  </select>
-                                </td>
                                 <td className="name-cell">
                                   <div className="name-cell-inner">
                                     <strong>{member.name}</strong>
@@ -1204,11 +1560,13 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                                   const shift = getMemberShiftForDate(member.id, dateISO);
                                   const cellLabel = formatShiftDisplay(shift.start, shift.end, shift.status);
                                   const isDiffTime = (shift.status === "Scheduled" || shift.status === "Premium Pay") && shift.start && parseInt(shift.start.split(":")[0]) !== hour;
+                                  const a = getMemberAssignment(member.id, dateISO);
+                                  const isDraftEdit = !!a && !a.is_published;
                                   const cellClass = shift.status === "Off" ? "off" : shift.status === "PTO" || shift.status === "LOA" || shift.status === "Vacation" ? "leave" : shift.status === "Premium Pay" ? "premium-pay" : isOT ? "ot-cell" : "";
                                   return (
-                                    <td key={dateISO} className={isWeekend(date) ? "weekend" : ""}>
+                                    <td key={dateISO} className={`${isWeekend(date) ? "weekend" : ""} ${holidayByDate[dateISO] ? "holiday-col" : ""}`}>
                                       <button
-                                        className={`shift-cell ${cellClass} ${isDiffTime ? "diff-time" : ""}`}
+                                        className={`shift-cell ${cellClass} ${isDiffTime ? "diff-time" : ""} ${isDraftEdit ? "draft-edited" : ""}`}
                                         onClick={() => openEditor(member, date, hour)}
                                       >
                                         <span>{cellLabel}</span>
@@ -1222,10 +1580,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                           {/* Open slot rows — one per unfilled slot */}
                           {!isCollapsed && Array.from({ length: openSlots }).map((_, slotIdx) => (
                             <tr key={`open-${hour}-${slotIdx}`} className="open-slot-row">
-                              <td className="open-slot-status-cell">
-                                <span className="open-slot-badge">OPEN</span>
-                              </td>
-                              <td className="open-slot-name-cell">
+                              <td colSpan={2} className="open-slot-name-cell">
                                 <span className="open-slot-label">Open Shift {slotIdx + 1}</span>
                                 <button
                                   className="open-slot-delete-btn"
@@ -1238,8 +1593,9 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                               </td>
                               {dates.map((date) => {
                                 const dateISO = formatDateISO(date);
+                                const isHolidayCol = !!holidayByDate[dateISO];
                                 return (
-                                  <td key={dateISO} className={isWeekend(date) ? "weekend" : ""}>
+                                  <td key={dateISO} className={`${isWeekend(date) ? "weekend" : ""} ${isHolidayCol ? "holiday-col" : ""}`}>
                                     <button
                                       className="shift-cell open-slot-shift"
                                       onClick={() => setAssignPanel({ hour, dateISO })}
@@ -1253,13 +1609,14 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                           ))}
                           {/* Subtotal row — always visible */}
                           <tr className={`shift-subtotal-row ${isCollapsed ? "collapsed" : ""}`}>
-                            <td colSpan={2} className="shift-subtotal-label">Staff at {formatHour24(hour)}</td>
+                            <td className="shift-subtotal-label">Staff at {formatHour24(hour)}</td>
                             {dates.map((date) => {
+                              const dateISO = formatDateISO(date);
                               const working = staffAtHour(hour, date);
                               const needed = neededAt(hour, isWeekend(date));
                               const cls = working === 0 ? "zero" : working < needed ? "partial" : "full";
                               return (
-                                <td key={formatDateISO(date)} className={`shift-subtotal-cell ${isWeekend(date) ? "weekend" : ""} ${cls}`}>
+                                <td key={dateISO} className={`shift-subtotal-cell ${isWeekend(date) ? "weekend" : ""} ${holidayByDate[dateISO] ? "holiday-col" : ""} ${cls}`}>
                                   <strong>{working}</strong>
                                   <span>/{needed}</span>
                                 </td>
@@ -1283,6 +1640,14 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                       <span>Volume plan enabled?</span>
                     </label>
                   </div>
+                  <div className="vs-divider" />
+                  <div className="volume-setting">
+                    <div>
+                      <span className="vs-label">Operational data</span>
+                      <span className="vs-hint">{dataPointCount > 0 ? `${dataPointCount.toLocaleString()} rows imported — volume auto-calculated` : "Import data to auto-calculate expected volume"}</span>
+                    </div>
+                    <Button icon="upload" onClick={() => { setImportModalOpen(true); setImportResult(""); setImportError(""); }}>Import Data</Button>
+                  </div>
                 </div>
 
                 {vpEnabled && (
@@ -1302,6 +1667,26 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                           <div className="ops-time-field">
                             <label className="ops-time-label">End</label>
                             <input type="time" value={vpEnd} onChange={(e) => setVpEnd(e.target.value)} className="time-input" />
+                        {dataPointCount > 0 && (
+                          <label className="checkbox-label auto-calc-toggle" style={{ display: "flex", alignItems: "center", gap: "4px", marginTop: "4px" }}>
+                            <input type="checkbox" checked={vpAutoVolume} onChange={(e) => {
+                              if (e.target.checked) {
+                                setVpAutoVolume(true);
+                                if (typeof localStorage !== "undefined") localStorage.setItem(`vpAutoVolume_${selectedGroup}`, "true");
+                                const rec = computeVolumeRecommendation(
+                                  volumeDataPointsRef.current,
+                                  parseInt(vpStart.split(":")[0]),
+                                  parseInt(vpEnd.split(":")[0])
+                                );
+                                setVpVolume(rec.hourlyVolume);
+                              } else {
+                                setVpAutoVolume(false);
+                                if (typeof localStorage !== "undefined") localStorage.setItem(`vpAutoVolume_${selectedGroup}`, "false");
+                              }
+                            }} />
+                            <span>Auto volume from imported data</span>
+                          </label>
+                        )}
                           </div>
                         </div>
                       </div>
@@ -1319,7 +1704,27 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                           <span className="vs-label">Weekend multiplier</span>
                           <span className="vs-hint">Percentage of weekday volume (e.g. 0.65 = 65%)</span>
                         </label>
-                        <input type="number" min="0" max="1" step="0.05" value={vpWeekendMult} onChange={(e) => setVpWeekendMult(Number(e.target.value) || 0)} className="rate-input" />
+                        <input type="number" min="0" step="0.05" value={vpWeekendMult} onChange={(e) => overrideWeekendMult(Number(e.target.value) || 0)} className="rate-input" />
+                        {dataPointCount > 0 && (
+                          <label className="checkbox-label auto-calc-toggle" style={{ display: "flex", alignItems: "center", gap: "4px", marginTop: "4px" }}>
+                            <input type="checkbox" checked={vpAutoWeekend} onChange={(e) => {
+                              if (e.target.checked) {
+                                setVpAutoWeekend(true);
+                                if (typeof localStorage !== "undefined") localStorage.setItem(`vpAutoWeekend_${selectedGroup}`, "true");
+                                const rec = computeVolumeRecommendation(
+                                  volumeDataPointsRef.current,
+                                  parseInt(vpStart.split(":")[0]),
+                                  parseInt(vpEnd.split(":")[0])
+                                );
+                                setVpWeekendMult(rec.weekendMultiplier);
+                              } else {
+                                setVpAutoWeekend(false);
+                                if (typeof localStorage !== "undefined") localStorage.setItem(`vpAutoWeekend_${selectedGroup}`, "false");
+                              }
+                            }} />
+                            <span>Auto</span>
+                          </label>
+                        )}
                       </div>
                     </div>
 
@@ -1351,7 +1756,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                                 <tr key={hour}>
                                   <td className="vt-hour">{hourLabel(hour)}</td>
                                   <td className="vt-input-cell">
-                                    <input type="number" min="0" value={vol} onChange={(e) => { const v = [...vpVolume]; v[hour] = Number(e.target.value) || 0; setVpVolume(v); }} className="volume-input" />
+                                    <input type="number" min="0" value={vol} onChange={(e) => overrideHourlyVolume(hour, Number(e.target.value) || 0)} className="volume-input" style={dataPointCount > 0 && !vpAutoVolume ? { borderColor: "var(--warning)" } : undefined} />
                                   </td>
                                   <td className="vt-need">{wdNeed}</td>
                                   <td className="vt-we-vol">{weVol}</td>
@@ -1427,26 +1832,33 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
             </>
           }
         >
+          {editingMember.notes && (
+            <div className="member-notes-box">
+              <strong>Availability Notes</strong>
+              <p>{editingMember.notes}</p>
+            </div>
+          )}
           <label>Date
             <div className="editor-date-display">{editingDate}</div>
           </label>
           <label>Status
             <select value={editStatus} onChange={(e) => { setEditStatus(e.target.value as ShiftStatus); setEditIncludeNonProd(false); }}>
-              <option value="Scheduled">Scheduled</option>
+              <option value="Scheduled">Productive</option>
               <option value="Premium Pay">Premium Pay</option>
               <option value="Off">Off</option>
               <option value="PTO">PTO</option>
               <option value="LOA">LOA</option>
               <option value="Vacation">Vacation</option>
+              <option value="Training">Training</option>
             </select>
           </label>
-          {(editStatus === "PTO" || editStatus === "LOA" || editStatus === "Vacation") && (
+          {(editStatus === "PTO" || editStatus === "LOA" || editStatus === "Vacation" || editStatus === "Training") && (
             <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               <input type="checkbox" checked={editIncludeNonProd} onChange={(e) => setEditIncludeNonProd(e.target.checked)} />
               <span>Include these hours in non-productive totals</span>
             </label>
           )}
-          {(editStatus === "Scheduled" || editStatus === "Premium Pay") && (
+          {hasShiftTimes(editStatus) && (
             <>
               <label>Shift Time
                 <div className="shift-time-inputs">
@@ -1455,24 +1867,26 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                   <div className="shift-time-field"><span>End</span><input type="time" value={editEnd} onChange={(e) => setEditEnd(e.target.value)} /></div>
                 </div>
               </label>
-              <label>Add Lunch Break (hours)
-                <div className="lunch-break-row">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.25"
-                    placeholder={String(editingMember.daily_unpaid_break)}
-                    value={editLunchBreak ?? ""}
-                    onChange={(e) => {
-                      const val = e.target.value === "" ? null : Number(e.target.value);
-                      setEditLunchBreak(val);
-                    }}
-                  />
-                  <span className="modal-hint" style={{ margin: 0 }}>
-                    Default: {editingMember.daily_unpaid_break} hrs (from Team tab). Enter a different value to override for this shift only.
-                  </span>
-                </div>
-              </label>
+              {(editStatus === "Scheduled" || editStatus === "Premium Pay") && (
+                <label>Add Lunch Break (hours)
+                  <div className="lunch-break-row">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.25"
+                      placeholder={String(editingMember.daily_unpaid_break)}
+                      value={editLunchBreak ?? ""}
+                      onChange={(e) => {
+                        const val = e.target.value === "" ? null : Number(e.target.value);
+                        setEditLunchBreak(val);
+                      }}
+                    />
+                    <span className="modal-hint" style={{ margin: 0 }}>
+                      Default: {editingMember.daily_unpaid_break} hrs (from Team tab). Enter a different value to override for this shift only.
+                    </span>
+                  </div>
+                </label>
+              )}
             </>
           )}
           {editStatus === "Premium Pay" && (
@@ -1556,6 +1970,48 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
         </Modal>
       )}
 
+      {/* Volume Data Import Modal */}
+      {importModalOpen && (
+        <Modal
+          title="Import Operational Data"
+          subtitle="Upload Timestamped Rows — Expected Volume And The Weekend Multiplier Are Recalculated Automatically."
+          onClose={() => setImportModalOpen(false)}
+          footer={
+            <>
+              <div />
+              <div className="modal-actions-right">
+                <Button onClick={() => setImportModalOpen(false)}>Close</Button>
+              </div>
+            </>
+          }
+        >
+          <p className="modal-hint">
+            Upload a CSV, TSV, or Excel file with one row per event (job, transport, task) and a date/time column
+            (for example "Timestamp", or "Date" plus "Time"). Rows are counted by hour of day and day of week.
+            Data outside your hours of operation is stored but only shown if you expand the hours later.
+            Importing more data over time refines the averages — nothing is overwritten.
+          </p>
+          <label className="volume-import-file-label">
+            <input
+              type="file"
+              accept=".csv,.tsv,.txt,.xlsx,.xls"
+              disabled={importing}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleVolumeDataFile(f);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {importing && <p className="modal-hint">Reading and importing data…</p>}
+          {importResult && <div className="import-success"><Icon name="check" size={16} /> {importResult}</div>}
+          {importError && <div className="error-banner"><Icon name="alert" size={16} /> {importError}</div>}
+          {dataPointCount > 0 && !importing && (
+            <p className="modal-hint">Current total for this group: {dataPointCount.toLocaleString()} imported rows. {lastImportInfo}</p>
+          )}
+        </Modal>
+      )}
+
       {/* Assign Panel */}
       {assignPanel && (
         <div className="assign-overlay" onClick={() => setAssignPanel(null)}>
@@ -1588,9 +2044,10 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                     <li key={member.id}>
                       <button className="assign-list-item" onClick={() => assignPanel.dateISO ? assignToOpenSlot(member, assignPanel.hour, assignPanel.dateISO) : assignToRow(member, assignPanel.hour)}>
                         <div className="assign-avatar">{initials}</div>
-                        <div>
+                        <div className="assign-member-text">
                           <strong>{member.name}</strong>
                           <span>{memberGroup?.name}</span>
+                          {member.notes && <small className="assign-member-note">{member.notes}</small>}
                         </div>
                       </button>
                     </li>
@@ -1605,22 +2062,125 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
       )}
 
       {/* Copy Schedule Confirmation */}
-      {showCopyPrompt && (
+      {/* Save Template Modal */}
+      {saveTemplateOpen && (
         <Modal
-          title="Copy Schedule From Previous Period"
-          subtitle={`Copy all shifts from the previous ${viewType} period into this one, matching by day of week.`}
-          onClose={() => setShowCopyPrompt(false)}
+          title="Save Schedule Template"
+          subtitle={`Capture the current schedule for ${currentGroup?.name} as a reusable template.`}
+          onClose={() => { setSaveTemplateOpen(false); setPendingReplaceTemplate(null); setTemplateNameError(""); }}
           footer={
             <>
               <div />
               <div className="modal-actions-right">
-                <Button onClick={() => setShowCopyPrompt(false)}>Cancel</Button>
-                <Button variant="primary" onClick={handleCopyFromPrevious}>Copy Shifts</Button>
+                <Button onClick={() => { setSaveTemplateOpen(false); setPendingReplaceTemplate(null); setTemplateNameError(""); }}>Cancel</Button>
+                {!pendingReplaceTemplate && <Button variant="primary" onClick={handleSaveTemplate} disabled={templatesBusy}>{templatesBusy ? "Saving…" : "Save Template"}</Button>}
+                {pendingReplaceTemplate && <Button variant="primary" onClick={handleReplaceTemplate} disabled={templatesBusy}>Replace</Button>}
+                {pendingReplaceTemplate && <Button onClick={handleRenameAndSave} disabled={templatesBusy}>Save as new name</Button>}
               </div>
             </>
           }
         >
-          <p className="modal-hint">This will create new shifts in the current period based on the previous period's assignments. Existing shifts will be overwritten for matching days. This only affects {currentGroup?.name}.</p>
+          {!pendingReplaceTemplate && (
+            <>
+              <label>Template name
+                <input
+                  type="text"
+                  value={templateName}
+                  onChange={(e) => { setTemplateName(e.target.value); setTemplateNameError(""); }}
+                  placeholder="e.g. Summer Bi-Weekly"
+                  autoFocus
+                />
+              </label>
+              <label>Period to save
+                <select value={templatePeriod} onChange={(e) => setTemplatePeriod(e.target.value as typeof templatePeriod)}>
+                  <option value="current">Current view ({dates.length} days)</option>
+                  <option value="7">One week (7 days)</option>
+                  <option value="14">Two weeks (14 days)</option>
+                  <option value="30">One month (30 days)</option>
+                  <option value="custom">Custom length</option>
+                </select>
+              </label>
+              {templatePeriod === "custom" && (
+                <label>Number of days
+                  <input type="number" min={1} value={templateCustomDays} onChange={(e) => setTemplateCustomDays(Math.max(1, Number(e.target.value) || 1))} />
+                </label>
+              )}
+              <p className="modal-hint">The template is anchored to the start of the pay period that covers the current view, so saved days line up with future pay periods when reused.</p>
+              {templateNameError && <div className="error-banner"><Icon name="alert" size={16} /> {templateNameError}</div>}
+            </>
+          )}
+          {pendingReplaceTemplate && (
+            <>
+              <div className="conflict-message">
+                <Icon name="alert" size={24} />
+                <p>A template named "{pendingReplaceTemplate.name}" already exists for {currentGroup?.name}. Would you like to replace it, or save under a new name?</p>
+              </div>
+              <label>Save under a new name
+                <input type="text" value={renameValue} onChange={(e) => { setRenameValue(e.target.value); setTemplateNameError(""); }} autoFocus />
+              </label>
+              {templateNameError && <div className="error-banner"><Icon name="alert" size={16} /> {templateNameError}</div>}
+            </>
+          )}
+        </Modal>
+      )}
+
+      {/* Templates Library Modal */}
+      {templatesModalOpen && (
+        <Modal
+          title="Schedule Templates"
+          subtitle={`Saved templates for ${currentGroup?.name}`}
+          onClose={() => setTemplatesModalOpen(false)}
+          footer={
+            <>
+              <div />
+              <div className="modal-actions-right">
+                <Button onClick={() => setTemplatesModalOpen(false)}>Close</Button>
+              </div>
+            </>
+          }
+        >
+          {templates.length === 0 ? (
+            <p className="modal-hint">No templates saved yet. Build a schedule, then click "Save Template" to capture it for reuse.</p>
+          ) : (
+            <div className="auth-claim-list">
+              {templates.map((t) => (
+                <div className="auth-claim-row" key={t.id}>
+                  <div>
+                    <strong>{t.name}</strong>
+                    <span>{t.period_length_days} days · starts {dayNames[t.start_day_of_week]}</span>
+                  </div>
+                  <div className="access-actions">
+                    <Button
+                      variant="primary"
+                      onClick={() => {
+                        setConfirmDialog({
+                          title: "Apply Template",
+                          message: `Note: selecting this template will remove any previously scheduled shifts for the current time period. Do you wish to proceed?`,
+                          onConfirm: () => { setConfirmDialog(null); handleApplyTemplate(t); },
+                        });
+                      }}
+                      disabled={templatesBusy}
+                    >
+                      Add
+                    </Button>
+                    <button
+                      className="access-remove"
+                      onClick={() => {
+                        setConfirmDialog({
+                          title: "Delete Template",
+                          message: `Note: Deleting this template will remove it permanently. Are you sure you want to proceed?`,
+                          onConfirm: () => { setConfirmDialog(null); handleDeleteTemplate(t); },
+                        });
+                      }}
+                      disabled={templatesBusy}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </Modal>
       )}
 

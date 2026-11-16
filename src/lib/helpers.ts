@@ -77,6 +77,7 @@ export const formatShiftDisplay = (start: string | null, end: string | null, sta
   if (status === "PTO") return "PTO";
   if (status === "LOA") return "LOA";
   if (status === "Vacation") return "Vacation";
+  if (status === "Training") return "Training";
   if (status === "Off" || (!start && !end)) return "-";
   if (status === "Premium Pay") return `${to12Hour(start)} - ${to12Hour(end)}`;
   if (!start || !end) return "-";
@@ -131,7 +132,7 @@ export const getCurrentBiweeklyStart = () => {
   return biweeklyStart;
 };
 
-export const getDateRange = (viewType: "daily" | "weekly" | "bi-weekly" | "monthly", startDate: Date) => {
+export const getDateRange = (viewType: ViewType, startDate: Date, rangeDays: number = 0) => {
   switch (viewType) {
     case "daily":
       return [startDate];
@@ -141,6 +142,8 @@ export const getDateRange = (viewType: "daily" | "weekly" | "bi-weekly" | "month
       return Array.from({ length: 14 }, (_, i) => addDays(startDate, i));
     case "monthly":
       return Array.from({ length: 30 }, (_, i) => addDays(startDate, i));
+    case "custom":
+      return Array.from({ length: Math.max(1, rangeDays) }, (_, i) => addDays(startDate, i));
   }
 };
 

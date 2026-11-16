@@ -1,0 +1,1 @@
+drop function if exists public.read_errors_helper();

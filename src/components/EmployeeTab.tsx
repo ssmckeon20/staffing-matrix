@@ -1,6 +1,7 @@
-import { useEffect, useState, useMemo, useCallback } from "react";
-import type { TeamMember, ShiftAssignment, AssignmentGroup, ScheduleNote, ScheduleHighlight, ViewType } from "../lib/types";
+import { Fragment, useEffect, useState, useMemo, useCallback } from "react";
+import type { TeamMember, ShiftAssignment, AssignmentGroup, ScheduleNote, ScheduleHighlight, ViewType, CompanyHoliday } from "../lib/types";
 import * as data from "../lib/data";
+import { useAuth } from "../lib/auth";
 import { Icon, Button } from "./ui";
 import {
   GROUP_COLORS, getDateRange, formatDateRange, formatDateISO, addDays,
@@ -19,11 +20,13 @@ interface SharedDateProps {
 }
 
 export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, setRangeStart, payPeriodStart }: { toast: ToastFn } & SharedDateProps) {
+  const { canEdit } = useAuth();
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [groups, setGroups] = useState<AssignmentGroup[]>([]);
   const [assignments, setAssignments] = useState<ShiftAssignment[]>([]);
   const [prevAssignments, setPrevAssignments] = useState<ShiftAssignment[]>([]);
   const [highlights, setHighlights] = useState<ScheduleHighlight[]>([]);
+  const [holidays, setHolidays] = useState<CompanyHoliday[]>([]);
   const [note, setNote] = useState<ScheduleNote | null>(null);
   const [noteText, setNoteText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -36,7 +39,11 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
     return localStorage.getItem("highlightChanges") !== "false";
   });
 
-  const dates = useMemo(() => getDateRange(viewType, rangeStart), [viewType, rangeStart]);
+  const [customEndISO, setCustomEndISO] = useState<string>("");
+  const customDays = customEndISO
+    ? Math.max(1, Math.round((new Date(customEndISO + "T00:00:00").getTime() - rangeStart.getTime()) / 86400000) + 1)
+    : 2;
+  const dates = useMemo(() => getDateRange(viewType, rangeStart, customDays), [viewType, rangeStart, customDays]);
   const rangeEnd = dates[dates.length - 1];
 
   // Prior period for change detection
@@ -45,17 +52,19 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
 
   const loadAll = useCallback(async () => {
     try {
-      const [m, g, a, h, n] = await Promise.all([
+      const [m, g, a, h, n, hol] = await Promise.all([
         data.fetchAllMembers(),
         data.fetchGroups(),
         data.fetchPublishedAssignments(dates[0], rangeEnd),
         data.fetchHighlights(),
         data.fetchScheduleNote(),
+        data.fetchCompanyHolidays(),
       ]);
       setMembers(m);
       setGroups(g);
       setAssignments(a);
       setHighlights(h);
+      setHolidays(hol);
       setNote(n);
       setNoteText(n?.note_text || "");
       setSelectedGroupIds(new Set(g.map((grp) => grp.id)));
@@ -89,7 +98,7 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
         setPrevAssignments(prev);
       })();
     }
-  }, [rangeStart, viewType]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rangeStart, viewType, customDays]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const getShift = (memberId: string, dateISO: string): ShiftAssignment | undefined => {
     return assignments.find((a) => a.member_id === memberId && a.assignment_date === dateISO);
@@ -121,8 +130,13 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
     return highlights.some((h) => h.member_id === memberId && h.highlight_date === dateISO);
   };
 
+  const holidayByDate: Record<string, CompanyHoliday> = Object.fromEntries(
+    holidays.map((h) => [h.holiday_date, h])
+  );
+
   // Clicking a cell toggles a persisted highlight in the database
   const toggleHighlight = async (memberId: string, dateISO: string) => {
+    if (!canEdit) return;
     await data.toggleHighlight(memberId, dateISO);
     const h = await data.fetchHighlights();
     setHighlights(h);
@@ -148,6 +162,7 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
   };
 
   const saveNote = async () => {
+    if (!canEdit) return;
     const n = await data.upsertScheduleNote(noteText);
     setNote(n);
     toast("Schedule note saved");
@@ -168,12 +183,21 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
   };
 
   const navigatePeriod = (direction: number) => {
-    const step = viewType === "bi-weekly" ? 14 : viewType === "monthly" ? 30 : viewType === "daily" ? 1 : 7;
-    setRangeStart(addDays(rangeStart, step * direction));
+    const step = viewType === "bi-weekly" ? 14 : viewType === "monthly" ? 30 : viewType === "daily" ? 1 : viewType === "custom" ? customDays : 7;
+    const delta = step * direction;
+    setRangeStart(addDays(rangeStart, delta));
+    if (viewType === "custom") {
+      const baseEnd = customEndISO ? new Date(customEndISO + "T00:00:00") : addDays(rangeStart, 1);
+      setCustomEndISO(formatDateISO(addDays(baseEnd, delta)));
+    }
   };
 
   const shiftViewType = (newType: ViewType) => {
     setViewType(newType);
+    if (newType === "custom") {
+      setCustomEndISO(formatDateISO(addDays(rangeStart, 1)));
+      return;
+    }
     const ppStart = new Date(payPeriodStart + "T00:00:00");
     const now = new Date();
     const diffDays = Math.floor((now.getTime() - ppStart.getTime()) / (1000 * 60 * 60 * 24));
@@ -208,9 +232,9 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
         <div>
           <div className="title-row">
             <h1>Employee Schedule</h1>
-            <span className="status-pill published">Published</span>
+            <span className="status-pill published">Posted</span>
           </div>
-          <p>Schedules Are Updated When You Publish From The Staffing Matrix.</p>
+          <p>Schedules Are Updated When You Post From The Staffing Matrix.</p>
         </div>
         <div className="heading-actions">
           <Button variant="icon" icon="chevronLeft" onClick={() => navigatePeriod(-1)} />
@@ -225,14 +249,38 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
             <button className={viewType === "weekly" ? "active" : ""} onClick={() => shiftViewType("weekly")}>Weekly</button>
             <button className={viewType === "bi-weekly" ? "active" : ""} onClick={() => shiftViewType("bi-weekly")}>Bi-Weekly</button>
             <button className={viewType === "monthly" ? "active" : ""} onClick={() => shiftViewType("monthly")}>Monthly</button>
+            <button className={viewType === "custom" ? "active" : ""} onClick={() => shiftViewType("custom")}>Custom</button>
           </div>
+          {viewType === "custom" && (
+            <div className="custom-range-picker">
+              <input
+                type="date"
+                value={formatDateISO(rangeStart)}
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  const newStart = new Date(e.target.value + "T00:00:00");
+                  setRangeStart(newStart);
+                  if (customEndISO && new Date(customEndISO + "T00:00:00") < addDays(newStart, 1)) {
+                    setCustomEndISO(formatDateISO(addDays(newStart, 1)));
+                  }
+                }}
+              />
+              <span>to</span>
+              <input
+                type="date"
+                value={customEndISO || formatDateISO(addDays(rangeStart, 1))}
+                min={formatDateISO(addDays(rangeStart, 1))}
+                onChange={(e) => { if (e.target.value) setCustomEndISO(e.target.value); }}
+              />
+            </div>
+          )}
           <Button variant="primary" icon="print" onClick={() => window.print()}>Print Schedule</Button>
         </div>
       </section>
 
       <div className="published-info-bar">
         <Icon name="calendar" size={16} />
-        <span>Last published: <strong>{lastPublished || "Not yet published"}</strong></span>
+        <span>Last posted: <strong>{lastPublished || "Not yet posted"}</strong></span>
         <span className="separator">·</span>
         <span>{formatDateRange(dates[0], rangeEnd)}</span>
         <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "16px" }}>
@@ -283,8 +331,8 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
         {assignments.length === 0 ? (
           <div className="empty-state">
             <Icon name="calendar" size={32} />
-            <h3>No Published Schedules Yet</h3>
-            <p>Publish Schedules From The Staffing Matrix To See Them Here.</p>
+            <h3>No Posted Schedules Yet</h3>
+            <p>Post Schedules From The Staffing Matrix To See Them Here.</p>
           </div>
         ) : (
           <div className="employee-table-wrap">
@@ -307,50 +355,74 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
                 )}
                 <tr>
                   <th>Team Member</th>
-                  {dates.map((date) => (
-                    <th key={formatDateISO(date)} className={isWeekend(date) ? "weekend" : ""}>
-                      {dayNames[date.getDay()]}
-                      <span>{formatDate(date)}</span>
-                    </th>
-                  ))}
+                  {dates.map((date) => {
+                    const dateISO = formatDateISO(date);
+                    const holiday = holidayByDate[dateISO];
+                    return (
+                      <th key={dateISO} className={`${isWeekend(date) ? "weekend" : ""} ${holiday ? "holiday-col" : ""}`}>
+                        {holiday && <em className="holiday-name">{holiday.name}</em>}
+                        {dayNames[date.getDay()]}
+                        <span>{formatDate(date)}</span>
+                      </th>
+                    );
+                  })}
                   <th>Total Hours</th>
                 </tr>
               </thead>
               <tbody>
-                {publishedMembers.map((member) => {
-                  const memberGroup = groups.find((g) => g.id === member.group_id);
-                  const totalHrs = memberTotalHours(member);
-                  const colorIdx = groups.findIndex((g) => g.id === member.group_id);
-                  return (
-                    <tr key={member.id}>
-                      <td>
-                        <strong>{member.name}</strong>
-                        <span className={`team-group-badge-sm ${GROUP_COLORS[colorIdx % GROUP_COLORS.length]}`}>{memberGroup?.name}</span>
-                      </td>
-                      {dates.map((date) => {
-                        const dateISO = formatDateISO(date);
-                        const a = getShift(member.id, dateISO);
-                        const manualHighlight = isHighlighted(member.id, dateISO);
-                        const autoChangeHighlight = cellShowsChangeHighlight(member.id, date);
-                        const shiftLabel = a ? formatShiftDisplay(a.shift_start, a.shift_end, a.status) : "-";
-                        const isLeaveStatus = a?.status === "PTO" || a?.status === "LOA" || a?.status === "Vacation";
-                        const cellClass = a?.status === "Off" || !a ? "off" : isLeaveStatus ? "leave" : a?.status === "Premium Pay" ? "premium-pay" : "";
-                        const showChangeHighlight = autoChangeHighlight && !manualHighlight;
-                        return (
-                          <td
-                            key={dateISO}
-                            className={`${cellClass} ${manualHighlight ? "highlighted" : ""} ${showChangeHighlight ? "change-highlighted" : ""} ${isWeekend(date) ? "weekend" : ""}`}
-                            onClick={() => toggleHighlight(member.id, dateISO)}
-                            title={showChangeHighlight ? "Schedule changed from previous period — click to toggle highlight" : "Click to toggle highlight"}
-                          >
-                            {shiftLabel}
-                          </td>
-                        );
-                      })}
-                      <td className="total-hours-cell"><strong>{hoursLabel(totalHrs)}</strong></td>
-                    </tr>
-                  );
-                })}
+                {groups
+                  .filter((g) => selectedGroupIds.has(g.id))
+                  .slice()
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((group) => {
+                    const groupMembers = publishedMembers
+                      .filter((m) => m.group_id === group.id)
+                      .slice()
+                      .sort((a, b) => a.name.localeCompare(b.name));
+                    if (groupMembers.length === 0) return null;
+                    const colorIdx = groups.findIndex((g) => g.id === group.id);
+                    return (
+                      <Fragment key={group.id}>
+                        <tr className="group-header-row">
+                          <th colSpan={dates.length + 2} className={`team-group-badge-sm ${GROUP_COLORS[colorIdx % GROUP_COLORS.length]}`}>
+                            {group.name}
+                          </th>
+                        </tr>
+                        {groupMembers.map((member) => {
+                          const totalHrs = memberTotalHours(member);
+                          return (
+                            <tr key={member.id}>
+                              <td>
+                                <strong>{member.name}</strong>
+                              </td>
+                              {dates.map((date) => {
+                                const dateISO = formatDateISO(date);
+                                const a = getShift(member.id, dateISO);
+                                const manualHighlight = isHighlighted(member.id, dateISO);
+                                const autoChangeHighlight = cellShowsChangeHighlight(member.id, date);
+                                const shiftLabel = a ? formatShiftDisplay(a.shift_start, a.shift_end, a.status) : "-";
+                                const isLeaveStatus = a?.status === "PTO" || a?.status === "LOA" || a?.status === "Vacation" || a?.status === "Training";
+                                const cellClass = a?.status === "Off" || !a ? "off" : isLeaveStatus ? "leave" : a?.status === "Premium Pay" ? "premium-pay" : a?.status === "Training" ? "training" : "";
+                                const showChangeHighlight = autoChangeHighlight && !manualHighlight;
+                                const isHolidayCol = !!holidayByDate[dateISO];
+                                return (
+                                  <td
+                                    key={dateISO}
+                                    className={`${cellClass} ${manualHighlight ? "highlighted" : ""} ${showChangeHighlight ? "change-highlighted" : ""} ${isWeekend(date) ? "weekend" : ""} ${isHolidayCol ? "holiday-col" : ""}`}
+                                    onClick={() => toggleHighlight(member.id, dateISO)}
+                                    title={showChangeHighlight ? "Schedule changed from previous period — click to toggle highlight" : "Click to toggle highlight"}
+                                  >
+                                    {shiftLabel}
+                                  </td>
+                                );
+                              })}
+                              <td className="total-hours-cell"><strong>{hoursLabel(totalHrs)}</strong></td>
+                            </tr>
+                          );
+                        })}
+                      </Fragment>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
@@ -360,6 +432,8 @@ export default function EmployeeTab({ toast, viewType, setViewType, rangeStart, 
           <strong>Schedule Color Key:</strong>
           <span><i className="key-change" />Yellow highlight = schedule changed from previous period</span>
           <span><i className="key-leave" />Orange = PTO / LOA / Vacation</span>
+          <span><i className="key-training" />Blue = Training</span>
+          <span><i className="key-holiday" />Light green = Company Holiday</span>
           <span><i className="key-premium" />Purple = Premium Pay</span>
         </div>
 

@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
-import type { AssignmentGroup, TeamMember, MemberStatus } from "../lib/types";
+import type { AssignmentGroup, TeamMember, CompanyHoliday } from "../lib/types";
 import * as data from "../lib/data";
+import { useAuth } from "../lib/auth";
 import { Icon, Button, Modal, ConfirmBanner, type IconName } from "./ui";
-import { GROUP_COLORS, GROUP_COLOR_HEX, compactShift, inputToShiftTime, timeToInput, hoursLabel } from "../lib/helpers";
-
-const STATUS_OPTIONS: MemberStatus[] = ["Productive", "Training", "Vacation"];
+import { GROUP_COLORS, GROUP_COLOR_HEX, compactShift, inputToShiftTime, timeToInput, hoursLabel, formatDateISO } from "../lib/helpers";
+import { detectHolidayName } from "../lib/holidayDetect";
 
 export default function TeamTab() {
+  const { canEdit } = useAuth();
   const [groups, setGroups] = useState<AssignmentGroup[]>([]);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,19 +26,27 @@ export default function TeamTab() {
   const [memberToAddId, setMemberToAddId] = useState("");
   const [error, setError] = useState("");
 
+  // Holidays calendar state
+  const [holidays, setHolidays] = useState<CompanyHoliday[]>([]);
+  const [calMonth, setCalMonth] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
+  const [renamingHoliday, setRenamingHoliday] = useState<CompanyHoliday | null>(null);
+
   // Add member form state
   const [mName, setMName] = useState("");
+  const [mEmployeeId, setMEmployeeId] = useState("");
   const [mGroup, setMGroup] = useState("");
-  const [mStatus, setMStatus] = useState<MemberStatus>("Productive");
   const [mWeeklyHours, setMWeeklyHours] = useState(40);
   const [mBreak, setMBreak] = useState(0.5);
   const [mOvertime, setMOvertime] = useState(40);
+  const [mRate, setMRate] = useState(0);
+  const [mNotes, setMNotes] = useState("");
 
   const loadAll = useCallback(async () => {
     try {
-      const [g, m] = await Promise.all([data.fetchGroups(), data.fetchAllMembers()]);
+      const [g, m, h] = await Promise.all([data.fetchGroups(), data.fetchAllMembers(), data.fetchCompanyHolidays()]);
       setGroups(g);
       setMembers(m);
+      setHolidays(h);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -56,11 +65,12 @@ export default function TeamTab() {
   const trainingCount = members.filter((m) => m.status === "Training").length;
 
   const resetMemberForm = () => {
-    setMName(""); setMGroup(groups[0]?.id ?? ""); setMStatus("Productive");
-    setMWeeklyHours(40); setMBreak(0.5); setMOvertime(40);
+    setMName(""); setMEmployeeId(""); setMGroup(groups[0]?.id ?? "");
+    setMWeeklyHours(40); setMBreak(0.5); setMOvertime(40); setMRate(0); setMNotes("");
   };
 
   const handleCreateGroup = async () => {
+    if (!canEdit) return;
     const name = newGroupName.trim();
     if (!name) return;
     try {
@@ -72,7 +82,7 @@ export default function TeamTab() {
   };
 
   const handleUpdateGroup = async () => {
-    if (!editingGroup) return;
+    if (!editingGroup || !canEdit) return;
     try {
       await data.updateGroup(editingGroup.id, {
         name: editingGroup.name,
@@ -86,7 +96,7 @@ export default function TeamTab() {
   };
 
   const handleDeleteGroup = async () => {
-    if (!confirmDeleteGroup) return;
+    if (!confirmDeleteGroup || !canEdit) return;
     try {
       await data.deleteGroup(confirmDeleteGroup.id, confirmDeleteGroup.name);
       setConfirmDeleteGroup(null);
@@ -95,15 +105,19 @@ export default function TeamTab() {
   };
 
   const handleAddMember = async () => {
+    if (!canEdit) return;
     if (!mName.trim() || !mGroup) return;
     try {
       await data.createMember({
         group_id: mGroup,
         name: mName.trim(),
-        status: mStatus,
+        employee_id: mEmployeeId.trim() || null,
+        status: "Productive",
         expected_weekly_hours: mWeeklyHours,
         daily_unpaid_break: mBreak,
         overtime_threshold: mOvertime,
+        hourly_rate: mRate,
+        notes: mNotes.trim() || null,
       });
       setAddingMember(false);
       resetMemberForm();
@@ -112,7 +126,7 @@ export default function TeamTab() {
   };
 
   const handleSaveMember = async () => {
-    if (!editingMember) return;
+    if (!editingMember || !canEdit) return;
     if (editingMember.group_id !== editingMemberOriginalGroup) {
       const sourceGroup = groups.find((g) => g.id === editingMemberOriginalGroup);
       const targetGroup = groups.find((g) => g.id === editingMember.group_id);
@@ -129,15 +143,17 @@ export default function TeamTab() {
   };
 
   const doSaveMember = async () => {
-    if (!editingMember) return;
+    if (!editingMember || !canEdit) return;
     try {
       await data.updateMember(editingMember.id, {
         name: editingMember.name,
+        employee_id: editingMember.employee_id?.trim() || null,
         group_id: editingMember.group_id,
-        status: editingMember.status,
         expected_weekly_hours: editingMember.expected_weekly_hours,
         daily_unpaid_break: editingMember.daily_unpaid_break,
         overtime_threshold: editingMember.overtime_threshold,
+        hourly_rate: editingMember.hourly_rate || 0,
+        notes: editingMember.notes?.trim() || null,
       });
       await data.logChange(`Updated team member "${editingMember.name}"`, "Team");
       setEditingMember(null);
@@ -147,7 +163,7 @@ export default function TeamTab() {
   };
 
   const handleRemoveMember = async () => {
-    if (!editingMember) return;
+    if (!editingMember || !canEdit) return;
     try {
       await data.deleteMember(editingMember.id, editingMember.name);
       setEditingMember(null);
@@ -161,6 +177,48 @@ export default function TeamTab() {
     setEditingMemberOriginalGroup(member.group_id);
     setConfirmRemoveMember(false);
   };
+
+  const holidayByDate = (dateISO: string) => holidays.find((h) => h.holiday_date === dateISO);
+
+  const toggleHoliday = async (date: Date) => {
+    if (!canEdit) return;
+    const dateISO = formatDateISO(date);
+    const existing = holidayByDate(dateISO);
+    try {
+      if (existing) {
+        await data.deleteCompanyHoliday(dateISO);
+        setHolidays((prev) => prev.filter((h) => h.holiday_date !== dateISO));
+      } else {
+        const name = detectHolidayName(date) || "Holiday";
+        const saved = await data.upsertCompanyHoliday(dateISO, name);
+        setHolidays((prev) => [...prev, saved].sort((a, b) => a.holiday_date.localeCompare(b.holiday_date)));
+        setRenamingHoliday(saved);
+      }
+    } catch (e) { setError(String(e)); }
+  };
+
+  const saveHolidayName = async () => {
+    if (!renamingHoliday || !canEdit) return;
+    const name = renamingHoliday.name.trim() || "Holiday";
+    try {
+      const saved = await data.upsertCompanyHoliday(renamingHoliday.holiday_date, name);
+      setHolidays((prev) => prev.map((h) => (h.holiday_date === saved.holiday_date ? saved : h)));
+      setRenamingHoliday(null);
+    } catch (e) { setError(String(e)); }
+  };
+
+  const calYear = calMonth.getFullYear();
+  const calMonthIdx = calMonth.getMonth();
+  const firstWeekday = new Date(calYear, calMonthIdx, 1).getDay();
+  const daysInMonth = new Date(calYear, calMonthIdx + 1, 0).getDate();
+  const calCells: (Date | null)[] = [
+    ...Array.from({ length: firstWeekday }, () => null),
+    ...Array.from({ length: daysInMonth }, (_, i) => new Date(calYear, calMonthIdx, i + 1)),
+  ];
+  const monthName = calMonth.toLocaleString("en-US", { month: "long", year: "numeric" });
+  const upcomingHolidays = holidays
+    .filter((h) => new Date(h.holiday_date + "T00:00:00") >= new Date(new Date().toDateString()))
+    .slice(0, 6);
 
   if (loading) return <div className="page"><p>Loading...</p></div>;
 
@@ -240,6 +298,72 @@ export default function TeamTab() {
         </div>
       </div>
 
+      {/* Company Holidays Section */}
+      <div className="team-mgmt-section">
+        <div className="team-mgmt-header">
+          <h3>Company Holidays</h3>
+          <span className="team-group-count">{holidays.length} defined</span>
+        </div>
+        <div className="holiday-layout">
+          <div className="holiday-cal">
+            <div className="holiday-cal-header">
+              <button className="holiday-nav-btn" onClick={() => setCalMonth(new Date(calYear, calMonthIdx - 1, 1))} aria-label="Previous month">
+                <Icon name="chevronLeft" size={14} />
+              </button>
+              <strong>{monthName}</strong>
+              <button className="holiday-nav-btn" onClick={() => setCalMonth(new Date(calYear, calMonthIdx + 1, 1))} aria-label="Next month">
+                <Icon name="chevronRight" size={14} />
+              </button>
+            </div>
+            <div className="holiday-cal-grid">
+              {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+                <span key={i} className="holiday-cal-dow">{d}</span>
+              ))}
+              {calCells.map((date, i) => {
+                if (!date) return <span key={`blank-${i}`} />;
+                const dateISO = formatDateISO(date);
+                const holiday = holidayByDate(dateISO);
+                return (
+                  <button
+                    key={dateISO}
+                    className={`holiday-cal-day ${holiday ? "is-holiday" : ""}`}
+                    onClick={() => toggleHoliday(date)}
+                    title={holiday ? `${holiday.name} — click to remove` : "Click to mark as holiday"}
+                  >
+                    {date.getDate()}
+                    {holiday && <small>{holiday.name}</small>}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="holiday-cal-hint">Click a date to mark it as a company holiday. Click again to remove it. The system suggests common US holiday names — you can rename any holiday below.</p>
+          </div>
+          <div className="holiday-list">
+            <strong>Defined Holidays</strong>
+            {holidays.length === 0 && <p className="team-empty">No holidays defined yet.</p>}
+            {holidays.map((h) => (
+              <div key={h.id} className="holiday-list-item">
+                <button className="holiday-list-name" onClick={() => setRenamingHoliday(h)} title="Rename holiday">
+                  {h.name}
+                </button>
+                <span className="holiday-list-date">{new Date(h.holiday_date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</span>
+                <button className="team-chip-delete" onClick={async () => {
+                  try {
+                    await data.deleteCompanyHoliday(h.holiday_date);
+                    setHolidays((prev) => prev.filter((x) => x.holiday_date !== h.holiday_date));
+                  } catch (e) { setError(String(e)); }
+                }} title="Remove holiday"><Icon name="x" size={12} /></button>
+              </div>
+            ))}
+            {upcomingHolidays.length > 0 && (
+              <p className="holiday-upcoming-hint">
+                Next up: {upcomingHolidays.map((h) => `${h.name} (${new Date(h.holiday_date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })})`).join(", ")}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Member Search */}
       <div className="team-search-bar">
         <Icon name="search" size={16} />
@@ -276,7 +400,6 @@ export default function TeamTab() {
                         OT after {member.overtime_threshold} hrs
                       </span>
                     </div>
-                    <span className={`team-status-badge ${(member.status || "productive").toLowerCase()}`}>{member.status}</span>
                     <button className="team-remove-btn" onClick={(e) => { e.stopPropagation(); setEditingMember(member); setConfirmRemoveMember(true); }} title={`Remove ${member.name}`}>
                       <Icon name="x" size={14} />
                     </button>
@@ -310,14 +433,12 @@ export default function TeamTab() {
           <label>Full Name
             <input placeholder="e.g. Jordan Lee" value={mName} onChange={(e) => setMName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAddMember()} autoFocus />
           </label>
+          <label>Employee ID
+            <input placeholder="e.g. EMP-0142" value={mEmployeeId} onChange={(e) => setMEmployeeId(e.target.value)} />
+          </label>
           <label>Assignment Group
             <select value={mGroup} onChange={(e) => setMGroup(e.target.value)}>
               {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </select>
-          </label>
-          <label>Status
-            <select value={mStatus} onChange={(e) => setMStatus(e.target.value as MemberStatus)}>
-              {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
           <div className="form-row-2">
@@ -331,6 +452,17 @@ export default function TeamTab() {
           <label>Overtime At (Hours Over)
             <input type="number" min="0" step="1" value={mOvertime} onChange={(e) => setMOvertime(Number(e.target.value) || 0)} />
           </label>
+          <label>Hourly Rate ($)
+            <input type="number" min="0" step="0.01" value={mRate} onChange={(e) => setMRate(Number(e.target.value) || 0)} />
+          </label>
+          <label>Notes
+            <textarea
+              placeholder="Availability considerations for AI-assisted scheduling, e.g. must have every Tuesday off, prefers earlier weekend shifts..."
+              rows={3}
+              value={mNotes}
+              onChange={(e) => setMNotes(e.target.value)}
+            />
+          </label>
         </Modal>
       )}
 
@@ -338,7 +470,7 @@ export default function TeamTab() {
       {editingMember && (
         <Modal
           title="Edit Team Member"
-          subtitle="Update Assignment Group, Status, And Overtime Settings."
+          subtitle="Update Assignment Group And Overtime Settings."
           onClose={() => { setEditingMember(null); setConfirmRemoveMember(false); }}
           footer={
             confirmRemoveMember ? null : (
@@ -355,14 +487,12 @@ export default function TeamTab() {
           <label>Full Name
             <input value={editingMember.name} onChange={(e) => setEditingMember({ ...editingMember, name: e.target.value })} />
           </label>
+          <label>Employee ID
+            <input value={editingMember.employee_id || ""} onChange={(e) => setEditingMember({ ...editingMember, employee_id: e.target.value })} />
+          </label>
           <label>Assignment Group
             <select value={editingMember.group_id} onChange={(e) => setEditingMember({ ...editingMember, group_id: e.target.value })}>
               {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </select>
-          </label>
-          <label>Status
-            <select value={editingMember.status} onChange={(e) => setEditingMember({ ...editingMember, status: e.target.value as MemberStatus })}>
-              {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
           <div className="form-row-2">
@@ -375,6 +505,17 @@ export default function TeamTab() {
           </div>
           <label>Overtime At (Hours Over)
             <input type="number" min="0" step="1" value={editingMember.overtime_threshold} onChange={(e) => setEditingMember({ ...editingMember, overtime_threshold: Number(e.target.value) || 0 })} />
+          </label>
+          <label>Hourly Rate ($)
+            <input type="number" min="0" step="0.01" value={editingMember.hourly_rate || 0} onChange={(e) => setEditingMember({ ...editingMember, hourly_rate: Number(e.target.value) || 0 })} />
+          </label>
+          <label>Notes
+            <textarea
+              placeholder="Availability considerations for AI-assisted scheduling, e.g. must have every Tuesday off, prefers earlier weekend shifts..."
+              rows={3}
+              value={editingMember.notes || ""}
+              onChange={(e) => setEditingMember({ ...editingMember, notes: e.target.value })}
+            />
           </label>
           {pendingGroupChange && pendingGroupChange.action === "member" && (
             <ConfirmBanner
@@ -464,7 +605,6 @@ export default function TeamTab() {
               {members.filter((m) => m.group_id === editingGroup.id).map((m) => (
                 <div key={m.id} className="group-member-row">
                   <span>{m.name}</span>
-                  <span className={`team-status-badge ${(m.status || "productive").toLowerCase()}`}>{m.status}</span>
                   <button className="group-member-remove" onClick={() => {
                     const otherGroup = groups.find((g) => g.id !== editingGroup.id);
                     if (otherGroup) {
@@ -530,6 +670,33 @@ export default function TeamTab() {
               confirmLabel="Yes, delete"
             />
           )}
+        </Modal>
+      )}
+      {/* Rename Holiday Modal */}
+      {renamingHoliday && (
+        <Modal
+          title="Name This Holiday"
+          subtitle={new Date(renamingHoliday.holiday_date + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+          onClose={() => setRenamingHoliday(null)}
+          footer={
+            <>
+              <div />
+              <div className="modal-actions-right">
+                <Button onClick={() => setRenamingHoliday(null)}>Cancel</Button>
+                <Button variant="primary" onClick={saveHolidayName}>Save Name</Button>
+              </div>
+            </>
+          }
+        >
+          <label>Holiday Name
+            <input
+              value={renamingHoliday.name}
+              onChange={(e) => setRenamingHoliday({ ...renamingHoliday, name: e.target.value })}
+              onKeyDown={(e) => e.key === "Enter" && saveHolidayName()}
+              autoFocus
+            />
+          </label>
+          <p className="holiday-modal-hint">This name will appear above the date column in the By Shift grid and on the posted, printable Employee Schedule.</p>
         </Modal>
       )}
     </div>

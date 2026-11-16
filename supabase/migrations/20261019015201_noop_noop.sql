@@ -1,0 +1,1 @@
+create or replace function public.diag_posture() returns table (fn text, body text) language sql stable as $$ select 'x','y' $$;
