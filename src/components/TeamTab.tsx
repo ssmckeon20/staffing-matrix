@@ -5,6 +5,7 @@ import { useAuth } from "../lib/auth";
 import { Icon, Button, Modal, ConfirmBanner, type IconName } from "./ui";
 import { GROUP_COLORS, GROUP_COLOR_HEX, compactShift, inputToShiftTime, timeToInput, hoursLabel, formatDateISO } from "../lib/helpers";
 import { detectHolidayName } from "../lib/holidayDetect";
+import ImportRosterModal from "./ImportRosterModal";
 
 export default function TeamTab() {
   const { canEdit } = useAuth();
@@ -25,6 +26,7 @@ export default function TeamTab() {
   const [pendingGroupChange, setPendingGroupChange] = useState<{ member: TeamMember; targetGroupId: string; targetGroupName: string; sourceGroupName: string; action: "member" | "group" } | null>(null);
   const [memberToAddId, setMemberToAddId] = useState("");
   const [error, setError] = useState("");
+  const [showImportRoster, setShowImportRoster] = useState(false);
 
   // Holidays calendar state
   const [holidays, setHolidays] = useState<CompanyHoliday[]>([]);
@@ -235,7 +237,7 @@ export default function TeamTab() {
           <p>Manage Team Members, Assignment Groups, And Onboarding Status. Changes Are Saved Automatically.</p>
         </div>
         <div className="heading-actions">
-          <Button icon="upload" onClick={() => alert("Excel roster import coming soon")}>Import roster</Button>
+          <Button icon="upload" onClick={() => setShowImportRoster(true)} disabled={!canEdit}>Import roster</Button>
           <Button variant="primary" icon="plus" onClick={() => { resetMemberForm(); setAddingMember(true); }}>Add team member</Button>
         </div>
       </section>
@@ -698,6 +700,14 @@ export default function TeamTab() {
           </label>
           <p className="holiday-modal-hint">This name will appear above the date column in the By Shift grid and on the posted, printable Employee Schedule.</p>
         </Modal>
+      )}
+      {showImportRoster && (
+        <ImportRosterModal
+          groups={groups}
+          existingMembers={members}
+          onClose={() => setShowImportRoster(false)}
+          onImported={loadAll}
+        />
       )}
     </div>
   );
