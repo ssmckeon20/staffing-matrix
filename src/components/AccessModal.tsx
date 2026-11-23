@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useAuth, type SiteRole } from "../lib/auth";
-import { Button, Modal, ConfirmBanner } from "./ui";
+import { Button, Icon, Modal, ConfirmBanner } from "./ui";
 
 interface MemberRow {
   user_id: string;
   role: SiteRole;
   name: string;
+  email: string | null;
   employee_id: string | null;
 }
 
@@ -93,7 +94,7 @@ export default function AccessModal({ onClose }: { onClose: () => void }) {
     const [{ data: memData, error: memErr }, { data: invData, error: invErr }] = await Promise.all([
       supabase
         .from("site_members")
-        .select("user_id, role, profile:profiles(first_name, last_name, employee_id)")
+        .select("user_id, role, profile:profiles(first_name, last_name, employee_id, email)")
         .eq("site_id", activeSite.id),
       supabase
         .from("site_invitations")
@@ -105,11 +106,12 @@ export default function AccessModal({ onClose }: { onClose: () => void }) {
     else {
       setMembers(
         (memData ?? []).map((m) => {
-          const prof = m.profile as { first_name: string; last_name: string; employee_id: string | null } | null;
+          const prof = m.profile as { first_name: string; last_name: string; employee_id: string | null; email: string | null } | null;
           return {
             user_id: m.user_id,
             role: m.role as SiteRole,
             name: prof ? [prof.first_name, prof.last_name].filter(Boolean).join(" ") || "Member" : "Member",
+            email: prof?.email ?? null,
             employee_id: prof?.employee_id ?? null,
           };
         })
@@ -294,7 +296,13 @@ export default function AccessModal({ onClose }: { onClose: () => void }) {
                   <div className="access-row" key={m.user_id}>
                     <div className="access-name">
                       <strong>{m.name}</strong>
-                      <span>{m.employee_id ? `ID ${m.employee_id}` : "—"}{m.role === "owner" ? " · owns this department" : ""}</span>
+                      <span>
+                        {m.email ? m.email : ""}
+                        {m.email && m.employee_id ? " · " : ""}
+                        {m.employee_id ? `ID ${m.employee_id}` : ""}
+                        {!m.email && !m.employee_id ? "—" : ""}
+                        {m.role === "owner" ? " · owns this department" : ""}
+                      </span>
                     </div>
                     {isOwner && m.role !== "owner" ? (
                       <div className="access-actions">
