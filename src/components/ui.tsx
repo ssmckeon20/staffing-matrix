@@ -24,7 +24,8 @@ export type IconName =
   | "refresh"
   | "check"
   | "alert"
-  | "swap";
+  | "swap"
+  | "lock";
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
@@ -52,6 +53,7 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     check: <path d="M20 6 9 17l-5-5" />,
     alert: <><path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4M12 17h.01" /></>,
     swap: <><path d="M7 10l-4-4 4-4" /><path d="M3 6h14a4 4 0 0 1 0 8h-1" /><path d="M17 14l4 4-4 4" /><path d="M21 18H7a4 4 0 0 1 0-8h1" /></>,
+    lock: <><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
   };
   return (
     <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">

@@ -19,6 +19,11 @@ export default function AuthScreen({ mode, hasInvite }: { mode: Mode; hasInvite:
   const [costCenter, setCostCenter] = useState("");
   const [claimable, setClaimable] = useState<ClaimableSite[] | null>(null);
   const [localError, setLocalError] = useState("");
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState("");
+  const [forgotError, setForgotError] = useState("");
 
   const errorText = localError || error;
 
@@ -60,6 +65,27 @@ export default function AuthScreen({ mode, hasInvite }: { mode: Mode; hasInvite:
       setLocalError(String((e as Error).message ?? e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleForgotPassword() {
+    setForgotError("");
+    setForgotMessage("");
+    if (!forgotEmail.trim()) {
+      setForgotError("Enter the email tied to your account.");
+      return;
+    }
+    setForgotBusy(true);
+    try {
+      const { error: err } = await supabase.auth.resetPasswordForEmail(forgotEmail.trim(), {
+        redirectTo: window.location.origin,
+      });
+      if (err) throw err;
+      setForgotMessage(`If an account exists for ${forgotEmail.trim()}, a password reset link has been sent. Check your inbox (and spam folder).`);
+    } catch (e) {
+      setForgotError(String((e as Error).message ?? e));
+    } finally {
+      setForgotBusy(false);
     }
   }
 
@@ -209,10 +235,49 @@ export default function AuthScreen({ mode, hasInvite }: { mode: Mode; hasInvite:
             placeholder={tab === "sign-up" ? "At least 6 characters" : "Your password"}
           />
         </div>
+        {tab === "sign-in" && (
+          <div className="auth-forgot-row">
+            <button type="button" className="auth-forgot-link" onClick={() => { setForgotOpen(true); setForgotEmail(email); setForgotError(""); setForgotMessage(""); }}>
+              Forgot password?
+            </button>
+          </div>
+        )}
         <button className="button button-primary auth-submit" onClick={handleSubmit} disabled={busy}>
           {busy ? "Please wait…" : tab === "sign-in" ? "Sign in" : "Create Account"}
         </button>
       </div>
+
+      {forgotOpen && (
+        <div className="auth-screen" onClick={() => setForgotOpen(false)}>
+          <div className="auth-card" onClick={(e) => e.stopPropagation()}>
+            <div className="auth-brand">
+              <div className="brand-mark"><Icon name="layout" size={20} /></div>
+              <span>Shiftline</span>
+            </div>
+            <h1>Reset your password</h1>
+            <p className="auth-sub">Enter the email tied to your account and we'll send you a link to set a new password.</p>
+            {forgotError && <div className="error-banner"><Icon name="alert" size={14} /> {forgotError}</div>}
+            {forgotMessage && <div className="success-banner"><Icon name="check" size={16} /> {forgotMessage}</div>}
+            <div className="auth-field">
+              <label>Email</label>
+              <input
+                type="email"
+                value={forgotEmail}
+                onChange={(e) => setForgotEmail(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleForgotPassword()}
+                placeholder="you@hospital.org"
+                autoFocus
+              />
+            </div>
+            <button className="button button-primary auth-submit" onClick={handleForgotPassword} disabled={forgotBusy}>
+              {forgotBusy ? "Sending…" : "Send reset link"}
+            </button>
+            <button className="button button-ghost auth-secondary" onClick={() => setForgotOpen(false)} disabled={forgotBusy}>
+              Back to sign in
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

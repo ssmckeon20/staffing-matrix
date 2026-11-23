@@ -7,6 +7,7 @@ import HistoryTab from "./components/HistoryTab";
 import AgentTab from "./components/AgentTab";
 import AccessModal from "./components/AccessModal";
 import DeleteSiteModal from "./components/DeleteSiteModal";
+import ChangePasswordModal from "./components/ChangePasswordModal";
 import { Button, Modal } from "./components/ui";
 import AuthScreen from "./screens/AuthScreen";
 import { useAuth } from "./lib/auth";
@@ -40,6 +41,7 @@ function App() {
   const [inviteToken, setInviteToken] = useState<string | null>(null);
   const [inviteError, setInviteError] = useState("");
   const [acceptedSiteName, setAcceptedSiteName] = useState("");
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   // Shared date range state across Matrix and Employee tabs
   const [viewType, setViewType] = useState<ViewType>("bi-weekly");
@@ -219,6 +221,11 @@ function App() {
                   <Icon name="trash" size={14} /> Delete a cost center…
                 </button>
               )}
+              <button
+                onClick={() => { setUserMenuOpen(false); setShowChangePassword(true); }}
+              >
+                <Icon name="lock" size={14} /> Change password…
+              </button>
               {memberships.length > 1 && (
                 <>
                   <div className="user-menu-label">Switch department</div>
@@ -277,6 +284,8 @@ function App() {
       {showAccess && <AccessModal onClose={() => setShowAccess(false)} />}
 
       {showDeleteSite && <DeleteSiteModal onClose={() => setShowDeleteSite(false)} />}
+
+      {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} />}
 
       {showCreateSite && (
         <Modal
