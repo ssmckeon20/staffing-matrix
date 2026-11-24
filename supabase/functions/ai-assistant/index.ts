@@ -1,4 +1,4 @@
-// AI Assistant Edge Function — calls Gemini 2.5 Flash
+// AI Assistant Edge Function — calls Gemini 3.5 Flash-Lite
 // To switch AI providers, replace the GEMINI API CALL block below.
 
 const corsHeaders = {
@@ -141,8 +141,8 @@ Deno.serve(async (req: Request) => {
     });
 
     // ============ AI PROVIDER — change this block to switch models ============
-    // Currently using Google Gemini 2.5 Flash (free tier: 1,500 req/day)
-    const GEMINI_MODEL = "gemini-2.5-flash";
+    // Currently using Google Gemini 3.5 Flash-Lite (free tier available, $0.30/$2.50 per 1M tokens)
+    const GEMINI_MODEL = "gemini-3.5-flash-lite";
     const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${Deno.env.get("GEMINI_API_KEY")}`;
 
     const geminiResponse = await fetch(GEMINI_URL, {
