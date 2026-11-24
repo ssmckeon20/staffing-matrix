@@ -1409,6 +1409,14 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                   <button className={matrixMode === "volume" ? "active" : ""} onClick={() => setMatrixMode("volume")}><Icon name="sliders" size={13} />Volume plan</button>
                 </div>
                 {matrixMode === "schedule" && (
+                  <>
+                    <button className="collapse-all-btn" onClick={() => {
+                      const allHours = new Set(opsHours);
+                      setCollapsedHours((prev) => prev.size === allHours.size ? new Set() : allHours);
+                    }}>
+                      <Icon name={collapsedHours.size === opsHours.length ? "chevronRight" : "chevronDown"} size={13} />
+                      {collapsedHours.size === opsHours.length ? "Expand All" : "Collapse All"}
+                    </button>
                   <div className="legend">
                     <span><i className="legend-good" />Scheduled</span>
                     <span><i className="legend-training" />Non-Productive</span>
@@ -1417,6 +1425,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                     <span><i className="legend-diff-time" />Different Shift Time</span>
                     <span><i className="legend-draft-edited" />Edited (Not Posted)</span>
                   </div>
+                  </>
                 )}
               </div>
             </div>
@@ -1494,7 +1503,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                             }
                             return (
                               <tr key={member.id} className={`employee-row ${member.status !== "Productive" ? "nonproductive-row" : ""}`}>
-                                <td className="name-cell">
+                                <td className="name-cell" colSpan={2}>
                                   <div className="name-cell-inner">
                                     <strong>{member.name}</strong>
                                     <span className={`employee-hours ${isOT ? "ot-warning" : ""}`}>{hoursLabel(schedHrs)} scheduled{isOT ? ` · ${otHrs}h OT` : ""}</span>
@@ -1609,7 +1618,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                           ))}
                           {/* Subtotal row — always visible */}
                           <tr className={`shift-subtotal-row ${isCollapsed ? "collapsed" : ""}`}>
-                            <td className="shift-subtotal-label">Staff at {formatHour24(hour)}</td>
+                            <td className="shift-subtotal-label" colSpan={2}>Staff at {formatHour24(hour)}</td>
                             {dates.map((date) => {
                               const dateISO = formatDateISO(date);
                               const working = staffAtHour(hour, date);
