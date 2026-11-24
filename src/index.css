@@ -1649,6 +1649,11 @@ input, select {
   border-bottom: 1px solid var(--border-light);
 }
 
+.employee-table th.weekend,
+.employee-table td.weekend {
+  background: var(--weekend);
+}
+
 .employee-table td strong {
   font-size: 12px;
   display: block;
