@@ -1433,6 +1433,10 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
             {matrixMode === "schedule" && (
               <div className="schedule-scroll">
                 <table className="schedule-matrix">
+                  <colgroup>
+                    <col className="member-column" />
+                    {dates.map((date) => <col key={formatDateISO(date)} className="date-column" />)}
+                  </colgroup>
                   <thead>
                     <tr className="week-band">
                       <th>Shift And Staff</th>
@@ -1469,11 +1473,12 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                         <Fragment key={hour}>
                           <tr className="shift-header-row" onClick={() => setCollapsedHours((prev) => { const next = new Set(prev); if (next.has(hour)) next.delete(hour); else next.add(hour); return next; })} style={{ cursor: "pointer" }} title={isCollapsed ? "Click to expand" : "Click to collapse"}>
                             <td className="shift-time-cell">
-                              <span className="shift-collapse-icon"><Icon name={isCollapsed ? "chevronRight" : "chevronDown"} size={12} /></span>
-                              <span className="shift-name">{formatHour24(hour)}</span>
-                            </td>
-                            <td className="shift-action-cell" onClick={(e) => e.stopPropagation()}>
-                              <button className="shift-add-btn" onClick={() => {
+                              <div className="shift-time-content">
+                                <span className="shift-collapse-icon"><Icon name={isCollapsed ? "chevronRight" : "chevronDown"} size={12} /></span>
+                                <span className="shift-name">{formatHour24(hour)}</span>
+                              </div>
+                              <button className="shift-add-btn" onClick={(e) => {
+                                e.stopPropagation();
                                 updateSlotAdjustment(hour, 1);
                                 setHasDraftChanges(true);
                                 toast(`Added slot at ${formatHour24(hour)}`);
@@ -1503,7 +1508,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                             }
                             return (
                               <tr key={member.id} className={`employee-row ${member.status !== "Productive" ? "nonproductive-row" : ""}`}>
-                                <td className="name-cell" colSpan={2}>
+                                <td className="name-cell">
                                   <div className="name-cell-inner">
                                     <strong>{member.name}</strong>
                                     <span className={`employee-hours ${isOT ? "ot-warning" : ""}`}>{hoursLabel(schedHrs)} scheduled{isOT ? ` · ${otHrs}h OT` : ""}</span>
@@ -1589,7 +1594,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                           {/* Open slot rows — one per unfilled slot */}
                           {!isCollapsed && Array.from({ length: openSlots }).map((_, slotIdx) => (
                             <tr key={`open-${hour}-${slotIdx}`} className="open-slot-row">
-                              <td colSpan={2} className="open-slot-name-cell">
+                              <td className="open-slot-name-cell">
                                 <span className="open-slot-label">Open Shift {slotIdx + 1}</span>
                                 <button
                                   className="open-slot-delete-btn"
@@ -1618,7 +1623,7 @@ export default function MatrixTab({ toast, viewType, setViewType, rangeStart, se
                           ))}
                           {/* Subtotal row — always visible */}
                           <tr className={`shift-subtotal-row ${isCollapsed ? "collapsed" : ""}`}>
-                            <td className="shift-subtotal-label" colSpan={2}>Staff at {formatHour24(hour)}</td>
+                            <td className="shift-subtotal-label">Staff at {formatHour24(hour)}</td>
                             {dates.map((date) => {
                               const dateISO = formatDateISO(date);
                               const working = staffAtHour(hour, date);

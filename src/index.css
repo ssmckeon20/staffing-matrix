@@ -837,7 +837,7 @@ input, select {
 /* ========== Schedule Matrix Table ========== */
 .schedule-scroll {
   overflow: auto;
-  padding: 0 20px 8px;
+  padding: 0 0 8px;
   max-height: calc(100vh - 260px);
 }
 
@@ -856,10 +856,19 @@ input, select {
 }
 
 .schedule-matrix {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
-  min-width: 900px;
+}
+
+.schedule-matrix .member-column {
+  width: 200px;
+}
+
+.schedule-matrix .date-column {
+  width: 120px;
 }
 
 .schedule-matrix th,
@@ -869,31 +878,15 @@ input, select {
   border-bottom: 1px solid var(--border-light);
 }
 
-/* Sticky left columns: Status + Team Member */
-.schedule-matrix th:nth-child(1),
-.schedule-matrix td:nth-child(1) {
+/* Only the Team Member column stays anchored while the schedule scrolls horizontally. */
+.schedule-matrix th:first-child,
+.schedule-matrix td:first-child {
   position: sticky;
   left: 0;
   z-index: 7;
-  width: 90px;
-  min-width: 90px;
-  max-width: 90px;
-}
-
-/* colSpan cells span both sticky columns — override the single-column width clamp */
-.schedule-matrix td[colspan="2"] {
-  max-width: none !important;
-  width: 200px !important;
-  min-width: 200px !important;
-}
-
-.schedule-matrix th:nth-child(2),
-.schedule-matrix td:nth-child(2) {
-  position: sticky;
-  left: 90px;
-  z-index: 7;
-  width: 110px;
-  min-width: 110px;
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
   box-shadow: 1px 0 0 var(--border);
 }
 
@@ -910,9 +903,8 @@ input, select {
   box-shadow: 0 1px 0 var(--border);
 }
 
-/* Header sticky-left cells need higher z-index to sit above body sticky cells */
-.schedule-matrix thead th:nth-child(1),
-.schedule-matrix thead th:nth-child(2) {
+/* The anchored Team Member header stays above the scrolling date headers. */
+.schedule-matrix thead th:first-child {
   z-index: 8;
 }
 
@@ -930,8 +922,7 @@ input, select {
   position: sticky;
 }
 
-.schedule-matrix .week-band th:nth-child(1),
-.schedule-matrix .week-band th:nth-child(2) {
+.schedule-matrix .week-band th:first-child {
   z-index: 9;
 }
 
@@ -950,11 +941,9 @@ input, select {
   background: var(--weekend);
 }
 
-/* First two columns are sticky — never apply weekend tint to them */
-.schedule-matrix th:nth-child(1).weekend,
-.schedule-matrix td:nth-child(1).weekend,
-.schedule-matrix th:nth-child(2).weekend,
-.schedule-matrix td:nth-child(2).weekend {
+/* The anchored Team Member column keeps its solid background while dates scroll. */
+.schedule-matrix th:first-child.weekend,
+.schedule-matrix td:first-child.weekend {
   background: var(--surface-2);
 }
 
@@ -966,16 +955,25 @@ input, select {
 }
 
 .shift-header-row .shift-time-cell {
-  width: 90px;
-}
-
-.shift-header-row .shift-action-cell {
-  width: 110px;
-  min-width: 110px;
+  width: 200px;
+  min-width: 200px;
 }
 
 .shift-header-row td.weekend {
   background: var(--weekend);
+}
+
+.shift-time-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.shift-time-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .shift-name {
@@ -1018,6 +1016,7 @@ input, select {
 
 .name-cell {
   position: relative;
+  width: 200px;
   min-width: 200px;
   background: var(--surface);
 }
@@ -1027,19 +1026,16 @@ input, select {
   background: var(--surface-2);
 }
 
-/* Ensure sticky left cells have opaque background */
-.schedule-matrix td:nth-child(1),
-.schedule-matrix td:nth-child(2) {
+/* Ensure the anchored Team Member cells have opaque backgrounds. */
+.schedule-matrix td:first-child {
   background: var(--surface);
 }
 
-.schedule-matrix tbody tr:hover td:nth-child(1),
-.schedule-matrix tbody tr:hover td:nth-child(2) {
+.schedule-matrix tbody tr:hover td:first-child {
   background: var(--surface-2);
 }
 
-.schedule-matrix .weekend:nth-child(1),
-.schedule-matrix .weekend:nth-child(2) {
+.schedule-matrix .weekend:first-child {
   background: var(--surface);
 }
 
