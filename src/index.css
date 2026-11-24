@@ -864,11 +864,11 @@ input, select {
 }
 
 .schedule-matrix .member-column {
-  width: 180px;
+  width: 160px;
 }
 
 .schedule-matrix .date-column {
-  width: 108px;
+  width: 96px;
 }
 
 .schedule-matrix th,
@@ -884,9 +884,9 @@ input, select {
   position: sticky;
   left: 0;
   z-index: 7;
-  width: 180px;
-  min-width: 180px;
-  max-width: 180px;
+  width: 160px;
+  min-width: 160px;
+  max-width: 160px;
   box-shadow: 1px 0 0 var(--border);
 }
 
@@ -955,8 +955,8 @@ input, select {
 }
 
 .shift-header-row .shift-time-cell {
-  width: 180px;
-  min-width: 180px;
+  width: 160px;
+  min-width: 160px;
 }
 
 .shift-header-row td.weekend {
@@ -1016,8 +1016,8 @@ input, select {
 
 .name-cell {
   position: relative;
-  width: 180px;
-  min-width: 180px;
+  width: 160px;
+  min-width: 160px;
   background: var(--surface);
 }
 
