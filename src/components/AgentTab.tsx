@@ -12,13 +12,13 @@ interface ChatMessage {
   suggestions?: string[];
 }
 
-const GREETING = "Hi! I'm your scheduling assistant. I can answer questions about the current schedule and propose changes — nothing gets modified without your approval. Try asking:";
+const GREETING = "Hi! I'm your AI scheduling assistant. I can analyze your schedule, find coverage gaps, estimate costs, and propose changes — nothing gets modified without your approval. Try asking:";
 
 const EXAMPLES = [
-  "Where do I have the most gaps?",
-  "What would happen if I removed Sheila Bonilla from this week's schedule?",
-  "I need to hire a new transporter, what shift do we most need the coverage?",
-  "Can you give me a list of all employees who worked on the last holiday?",
+  "Where do I have the most coverage gaps?",
+  "What's my projected labor cost for this pay period?",
+  "Who is at risk of hitting overtime this week?",
+  "If I need to hire someone, what shift should they cover?",
 ];
 
 export default function AgentTab() {
@@ -56,7 +56,8 @@ export default function AgentTab() {
       if (!ctxRef.current) {
         ctxRef.current = await loadContext(dates);
       }
-      const answer = await answerQuestion(question, ctxRef.current);
+      const history = messages.map((m) => ({ role: m.role, text: m.text }));
+      const answer = await answerQuestion(question, ctxRef.current, history);
       setMessages((prev) => [...prev, {
         role: "assistant",
         text: answer.text,
